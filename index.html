@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <title>Agente Borsa – Segnali</title>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:40px;background:#f7f7f7}
+    h1{color:#333}table{width:100%;border-collapse:collapse;background:#fff}
+    th,td{padding:10px;border:1px solid #ddd;text-align:left}
+    .up{background:#e6ffe6}.down{background:#ffe6e6}
+    .bull{color:green}.bear{color:darkred}
+  </style>
+</head>
+<body>
+  <h1>Segnali del <span id="data"></span></h1>
+  <table>
+    <thead>
+      <tr><th>Ticker</th><th>Descrizione</th><th>Segnali</th></tr>
+    </thead>
+    <tbody id="corpo"></tbody>
+  </table>
+
+  <script>
+    // generato dall'agente → file segnali.json
+    fetch('segnali.json')
+      .then(r => r.json())
+      .then(j => {
+        document.getElementById('data').textContent = j.data;
+        const corpo = document.getElementById('corpo');
+        j.segnali.forEach(s => {
+          const tr = document.createElement('tr');
+          tr.className = s.direzione;
+          tr.innerHTML = `
+            <td><b>${s.ticker}</b></td>
+            <td>${s.descr}</td>
+            <td>${s.testi.join('<br>')}</td>`;
+          corpo.appendChild(tr);
+        });
+      })
+      .catch(() => document.body.innerHTML = '<h1>Nessun segnale odierno</h1>');
+  </script>
+</body>
+</html>
