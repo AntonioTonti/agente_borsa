@@ -79,9 +79,4 @@ def check_signals(ticker):
             send_email(f"[{ticker}] Segnali attivi", "\n".join(alerts))
     except Exception as e:
         print(f"❌ Errore su {ticker}: {e}")
-# Test email
-send_email("📬 Test Agente Borsa", "Agente attivo e funzionante!")
-if __name__ == "__main__":
-    portfolio = load_portfolio()
-    for ticker in portfolio:
-        check_signals(ticker)
+
