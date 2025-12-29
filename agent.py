@@ -82,4 +82,8 @@ def check_signals(ticker):
             print(f"✅ Nessun segnale per {ticker}")
     except Exception as e:
         print(f"❌ Errore su {ticker}: {e}")
-
+# ---- test visivo ----
+print("📬 SEGNALI per TEST.MI:")
+print("🟢 Incrocio rialzista MA31/EMA10")
+print("🕯️ Heikin Ashi cambio colore: BULL")
+# ----------------------
