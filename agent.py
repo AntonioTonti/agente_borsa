@@ -84,4 +84,7 @@ def check_signals(ticker):
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} ✅ Nessun segnale per {ticker}")
     except Exception as e:
         print(f"❌ Errore su {ticker}: {e}")
-
+if __name__ == "__main__":
+    portfolio = load_portfolio()
+    for ticker in portfolio:
+        check_signals(ticker)
