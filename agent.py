@@ -13,6 +13,23 @@ EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = "antonio.tonti@tiscali.it"
 
+DESCR = {
+    "STM": "STMicroelectronics N.V.",
+    "SPM.MI": "Saipem S.p.A.",
+    "AMP.MI": "Amplifon S.p.A.",
+    "ZGN.MI": "Zignago Vetro S.p.A.",
+    "NEXI.MI": "Nexi S.p.A.",
+    "TIT.MI": "Telecom Italia S.p.A.",
+    "BSS.MI": "Biesse S.p.A.",
+    "TSL.MI": "Tessellis S.p.A.",
+    "PRY.MI": "Prysmian S.p.A.",
+    "REC.MI": "Recordati S.p.A.",
+    "WBD.MI": "Webuild S.p.A.",
+    "CPR.MI": "Davide Campari-Milano S.p.A.",
+    "FCT.MI": "Fincantieri S.p.A.",
+    "PIRC.MI": "Pirelli & C. S.p.A."
+}
+
 def send_email(subject, body):
     msg = MIMEMultipart()
     msg['From'] = EMAIL_SENDER
@@ -77,14 +94,25 @@ def check_signals(ticker):
         if color_now != color_prev:
             alerts.append(f"🕯️ Heikin Ashi cambio colore: {color_now.upper()}")
 
-        if alerts:
+                if alerts:
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} 📬 SEGNALI per {ticker}:")
             print("\n".join(alerts))
-        else:
-            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} ✅ Nessun segnale per {ticker}")
+            # aggiunge a lista globale
+            SEGNALI_ODIERNI.append({
+                "ticker": ticker,
+                "descr": DESCR.get(ticker, ticker),
+                "direzione": "up" if "rialzista" in alerts[0] or "UP" in alerts[0] else "down",
+                "testi": alerts
+            })
     except Exception as e:
         print(f"❌ Errore su {ticker}: {e}")
 if __name__ == "__main__":
     portfolio = load_portfolio()
     for ticker in portfolio:
         check_signals(ticker)
+# scrive il file JSON
+with open("segnali.json", "w", encoding="utf-8") as f:
+    json.dump({
+        "data": datetime.now().strftime('%Y-%m-%d %H:%M'),
+        "segnali": SEGNALI_ODIERNI
+    }, f, ensure_ascii=False, indent=2)
