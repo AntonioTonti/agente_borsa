@@ -76,6 +76,9 @@ def check_signals(ticker):
             alerts.append(f"🕯️ Heikin Ashi cambio colore: {color_now.upper()}")
 
         if alerts:
+             print(f"📬 SEGNALI per {ticker}:\n" + "\n".join(alerts))
+         else:
+            print(f"✅ Nessun segnale per {ticker}")
             send_email(f"[{ticker}] Segnali attivi", "\n".join(alerts))
     except Exception as e:
         print(f"❌ Errore su {ticker}: {e}")
