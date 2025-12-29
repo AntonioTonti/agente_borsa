@@ -1,15 +1,15 @@
-import os
 import yfinance as yf
 import ta
 import pandas as pd
 import numpy as np
 import smtplib
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import mplfinance as mpf
+import requests
 
 # Config
-EMAIL_SENDER = "yourbot@gmail.com"
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = "antonio.tonti@tiscali.it"
 
@@ -34,7 +34,8 @@ def heikin_ashi_color(df):
     return "bull" if ha_close.iloc[-1] > ha_open.iloc[-1] else "bear"
 
 def zigzag_direction(df, deviation=10, depth=10):
-    zz = ta.trend.zigzag(df['Close'], deviation=deviation, depth=depth)
+    close = df['Close'].squeeze()
+    zz = ta.trend.zigzag(close, deviation=deviation, depth=depth)
     if zz.iloc[-1] > zz.iloc[-2]:
         return "up"
     elif zz.iloc[-1] < zz.iloc[-2]:
@@ -46,9 +47,11 @@ def check_signals(ticker):
     if len(df) < 50:
         return
 
+    close = df['Close'].squeeze()
+
     # MA 31 vs EMA 10
-    ma31 = ta.trend.sma_indicator(df['Close'], window=31)
-    ema10 = ta.trend.ema_indicator(df['Close'], window=10)
+    ma31 = ta.trend.sma_indicator(close, window=31)
+    ema10 = ta.trend.ema_indicator(close, window=10)
     crossover = np.where(ma31 > ema10, 1, 0)
     signal = pd.Series(crossover).diff().iloc[-1]
 
@@ -75,7 +78,6 @@ def check_signals(ticker):
         send_email(f"[{ticker}] Segnali attivi", "\n".join(alerts))
 
 if __name__ == "__main__":
-    import os
     portfolio = load_portfolio()
     for ticker in portfolio:
         check_signals(ticker)
