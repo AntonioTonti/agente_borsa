@@ -1,3 +1,5 @@
+import os
+from datetime import datetime
 import yfinance as yf
 import ta
 import pandas as pd
@@ -76,14 +78,10 @@ def check_signals(ticker):
             alerts.append(f"🕯️ Heikin Ashi cambio colore: {color_now.upper()}")
 
         if alerts:
-            print(f"📬 SEGNALI per {ticker}:\n" + "\n".join(alerts))
-            # send_email(f"[{ticker}] Segnali attivi", "\n".join(alerts))  # disabilitata per ora
+            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} 📬 SEGNALI per {ticker}:")
+            print("\n".join(alerts))
         else:
-            print(f"✅ Nessun segnale per {ticker}")
+            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} ✅ Nessun segnale per {ticker}")
     except Exception as e:
         print(f"❌ Errore su {ticker}: {e}")
-# ---- test visivo ----
-print("📬 SEGNALI per TEST.MI:")
-print("🟢 Incrocio rialzista MA31/EMA10")
-print("🕯️ Heikin Ashi cambio colore: BULL")
-# ----------------------
+
