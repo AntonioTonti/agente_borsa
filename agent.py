@@ -106,13 +106,17 @@ def check_signals(ticker):
             })
     except Exception as e:
         print(f"❌ Errore su {ticker}: {e}")
+# ---------- inizializza lista globale ----------
+SEGNALI_ODIERNI = []
+
 if __name__ == "__main__":
     portfolio = load_portfolio()
     for ticker in portfolio:
         check_signals(ticker)
-# scrive il file JSON
-with open("segnali.json", "w", encoding="utf-8") as f:
-    json.dump({
-        "data": datetime.now().strftime('%Y-%m-%d %H:%M'),
-        "segnali": SEGNALI_ODIERNI
-    }, f, ensure_ascii=False, indent=2)
+
+    # scrive il file JSON per la pagina HTML
+    with open("segnali.json", "w", encoding="utf-8") as f:
+        json.dump({
+            "data": datetime.now().strftime('%Y-%m-%d %H:%M'),
+            "segnali": SEGNALI_ODIERNI
+        }, f, ensure_ascii=False, indent=2)
