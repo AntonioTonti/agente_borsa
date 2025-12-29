@@ -6,7 +6,6 @@ import smtplib
 import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import requests
 
 # Config
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
@@ -26,24 +25,24 @@ def send_email(subject, body):
 
 def load_portfolio():
     with open("portfolio.txt") as f:
-        return [line.strip() for line in f if line.strip()]
+        return [line.strip().upper() for line in f if line.strip()]
 
 def heikin_ashi_color(df):
     ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
     ha_open = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
     return "bull" if ha_close.iloc[-1] > ha_open.iloc[-1] else "bear"
 
-def zigzag_direction(df, deviation=10, depth=10):
+def zigzag_direction(df, depth=10):
     close = df['Close'].squeeze()
-    zz = ta.trend.zigzag(close, deviation=deviation, depth=depth)
-    if zz.iloc[-1] > zz.iloc[-2]:
+    recent = close.tail(depth)
+    if recent.iloc[-1] > recent.max() * 0.98:
         return "up"
-    elif zz.iloc[-1] < zz.iloc[-2]:
+    elif recent.iloc[-1] < recent.min() * 1.02:
         return "down"
     return "flat"
 
 def check_signals(ticker):
-    df = yf.download(ticker, period="3mo", interval="1d")
+    df = yf.download(ticker, period="6mo", interval="1d", progress=False)
     if len(df) < 50:
         return
 
