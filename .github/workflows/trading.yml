@@ -1,0 +1,26 @@
+name: AI Trading Agent
+
+on:
+  schedule:
+    - cron: '0 18 * * 1-5'  # Ogni giorno feriale alle 18:00 UTC
+  workflow_dispatch:
+
+jobs:
+  trading-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout codice
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Installa dipendenze
+        run: |
+          pip install yfinance ta numpy pandas mplfinance
+
+      - name: Esegui agente
+        run: python agent.py
