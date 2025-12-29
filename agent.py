@@ -30,8 +30,8 @@ def load_portfolio():
 
 def heikin_ashi_color(df):
     ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
-    ha_open = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
-    bull = ha_close.iloc[-1] > ha_open.iloc[-1]
+    ha_open  = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
+    bull = ha_close.iloc[-1].item() > ha_open.iloc[-1].item()
     return "bull" if bull else "bear"
 
 def zigzag_direction(df, depth=10):
