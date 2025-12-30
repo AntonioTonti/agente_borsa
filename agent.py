@@ -114,6 +114,11 @@ if __name__ == "__main__":
     portfolio = load_portfolio()
     for ticker in portfolio:
         check_signals(ticker)
+
+    
+print(f"DEBUG: invio a https://api.telegram.org/bot{token}/sendMessage")
+print(f"DEBUG: payload={payload}")
+
     
     # invio su Telegram
     if SEGNALI_ODIERNI:
