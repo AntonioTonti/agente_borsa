@@ -126,7 +126,7 @@ if __name__ == "__main__":
         for s in SEGNALI_ODIERNI:
             testo += f"*{s['ticker']}* – {s['descr']}\n"
             testo += "\n".join(s['testi']) + "\n\n"
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        url = f"https://api.telegram.org/bot8467905648:AAGIJs84KvZXidl95wXblQsh-xqGfRY7NvY/sendMessage"
         payload = {"chat_id": chat_id, "text": testo, "parse_mode": "Markdown"}
         resp = requests.post(url, data=payload, timeout=10)
         print(f"DEBUG Telegram: status={resp.status_code}, text={resp.text}")
