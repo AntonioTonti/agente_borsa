@@ -121,6 +121,6 @@ if __name__ == "__main__":
         for s in SEGNALI_ODIERNI:
             testo += f"*{s['ticker']}* – {s['descr']}\n"
             testo += "\n".join(s['testi']) + "\n\n"
-        url = f"https://api.telegram.org/bot123456789:AAbbccddeeffgghh/sendMessage"
-        payload = {"chat_id": 987654321, "text": testo, "parse_mode": "Markdown"}
+        url = f"https://api.telegram.org/bot8220547490:AAGY308H0V9r0-_eTkO4UK8s3gSGm-l3Fek/sendMessage"
+        payload = {"chat_id": 327988526, "text": testo, "parse_mode": "Markdown"}
         requests.post(url, data=payload, timeout=10)
