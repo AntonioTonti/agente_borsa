@@ -6,9 +6,6 @@ import ta
 import pandas as pd
 import numpy as np
 
-TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-
 DESCR = {
     "STM": "STMicroelectronics N.V.",
     "SPM.MI": "Saipem S.p.A.",
@@ -66,20 +63,23 @@ def check_signals(ticker):
 
 # ---------- MAIN ----------
 if __name__ == "__main__":
+    token   = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    print(f"DEBUG: token presente = {bool(token)}")
+    print(f"DEBUG: chat_id presente = {bool(chat_id)}")
+
     segnali = []
     for ticker in load_portfolio():
         alerts = check_signals(ticker)
         if alerts:
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} 📬 {ticker}: {' | '.join(alerts)}")
             segnali.append(f"*{ticker}* – {DESCR.get(ticker, ticker)}\n" + "\n".join(alerts))
+
     print(f"DEBUG: segnali totali {len(segnali)}")
-    print(f"DEBUG: token presente = {bool(TOKEN)}")
-    print(f"DEBUG: chat_id presente = {bool(CHAT_ID)}")
-    if segnali and TOKEN and CHAT_ID:
+    if segnali and token and chat_id:
         text = f"📈 Segnali Borsa {datetime.now().strftime('%d/%m %H:%M')}\n\n" + "\n\n".join(segnali)
-        url  = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        resp = requests.post(url, json={"chat_id": CHAT_ID, "text": text, "parse_mode": "Markdown"}, timeout=10)
+        url  = f"https://api.telegram.org/bot{token}/sendMessage"
+        resp = requests.post(url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}, timeout=10)
         print(f"DEBUG Telegram: {resp.status_code} - {resp.text}")
     else:
-        print("DEBUG: nessun segnale o token/chat mancante")
-
+        print("DEBUG: nessun invio (mancano segnali o token/chat)")
