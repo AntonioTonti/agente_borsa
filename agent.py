@@ -126,3 +126,6 @@ if __name__ == "__main__":
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat_id, "text": testo, "parse_mode": "Markdown"}
         requests.post(url, data=payload, timeout=10)
+
+        resp = requests.post(url, data=payload, timeout=10)
+        print(f"DEBUG Telegram: status={resp.status_code}, text={resp.text}")
