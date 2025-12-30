@@ -23,6 +23,6 @@ jobs:
           pip install yfinance ta numpy pandas mplfinance
 
       - name: Esegui agente
-        run: python agent.py
+        run: python agent_v2.py
 
   
