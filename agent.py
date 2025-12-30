@@ -108,6 +108,7 @@ def check_signals(ticker):
     except Exception as e:
         print(f"❌ Errore su {ticker}: {e}")
 # ---------- inizializza lista globale ----------
+# ---------- inizializza lista globale ----------
 SEGNALI_ODIERNI = []
 
 if __name__ == "__main__":
@@ -115,11 +116,8 @@ if __name__ == "__main__":
     for ticker in portfolio:
         check_signals(ticker)
 
-    
-print(f"DEBUG: invio a https://api.telegram.org/bot{token}/sendMessage")
-print(f"DEBUG: payload={payload}")
+    print(f"DEBUG: segnali trovati {len(SEGNALI_ODIERNI)}")
 
-    
     # invio su Telegram
     if SEGNALI_ODIERNI:
         token   = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -130,7 +128,5 @@ print(f"DEBUG: payload={payload}")
             testo += "\n".join(s['testi']) + "\n\n"
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = {"chat_id": chat_id, "text": testo, "parse_mode": "Markdown"}
-        requests.post(url, data=payload, timeout=10)
-
         resp = requests.post(url, data=payload, timeout=10)
         print(f"DEBUG Telegram: status={resp.status_code}, text={resp.text}")
