@@ -2,10 +2,10 @@ import os
 from datetime import datetime
 import yfinance as yf
 import ta
+import json
 import pandas as pd
 import numpy as np
 import smtplib
-import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -94,7 +94,7 @@ def check_signals(ticker):
         if color_now != color_prev:
             alerts.append(f"🕯️ Heikin Ashi cambio colore: {color_now.upper()}")
 
-                if alerts:
+        if alerts:
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} 📬 SEGNALI per {ticker}:")
             print("\n".join(alerts))
             # aggiunge a lista globale
