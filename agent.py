@@ -117,10 +117,12 @@ if __name__ == "__main__":
     
     # invio su Telegram
     if SEGNALI_ODIERNI:
+        token   = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
         testo = f"📈 Segnali Borsa {datetime.now().strftime('%d/%m %H:%M')}\n\n"
         for s in SEGNALI_ODIERNI:
             testo += f"*{s['ticker']}* – {s['descr']}\n"
             testo += "\n".join(s['testi']) + "\n\n"
-        url = f"https://api.telegram.org/bot8220547490:AAGY308H0V9r0-_eTkO4UK8s3gSGm-l3Fek/sendMessage"
-        payload = {"chat_id": 327988526, "text": testo, "parse_mode": "Markdown"}
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": testo, "parse_mode": "Markdown"}
         requests.post(url, data=payload, timeout=10)
