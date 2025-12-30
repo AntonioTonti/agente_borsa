@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+import requests
 import yfinance as yf
 import ta
 import json
@@ -120,3 +121,13 @@ if __name__ == "__main__":
             "data": datetime.now().strftime('%Y-%m-%d %H:%M'),
             "segnali": SEGNALI_ODIERNI
         }, f, ensure_ascii=False, indent=2)
+    
+    # invio su Telegram
+    if SEGNALI_ODIERNI:
+        testo = f"📈 Segnali Borsa {datetime.now().strftime('%d/%m %H:%M')}\n\n"
+        for s in SEGNALI_ODIERNI:
+            testo += f"*{s['ticker']}* – {s['descr']}\n"
+            testo += "\n".join(s['testi']) + "\n\n"
+        url = f"https://api.telegram.org/bot123456789:AAbbccddeeffgghh/sendMessage"
+        payload = {"chat_id": 987654321, "text": testo, "parse_mode": "Markdown"}
+        requests.post(url, data=payload, timeout=10)
