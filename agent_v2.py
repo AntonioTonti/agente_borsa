@@ -73,6 +73,8 @@ if __name__ == "__main__":
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M')} 📬 {ticker}: {' | '.join(alerts)}")
             segnali.append(f"*{ticker}* – {DESCR.get(ticker, ticker)}\n" + "\n".join(alerts))
     print(f"DEBUG: segnali totali {len(segnali)}")
+    print(f"DEBUG: token presente = {bool(TOKEN)}")
+    print(f"DEBUG: chat_id presente = {bool(CHAT_ID)}")
     if segnali and TOKEN and CHAT_ID:
         text = f"📈 Segnali Borsa {datetime.now().strftime('%d/%m %H:%M')}\n\n" + "\n\n".join(segnali)
         url  = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -80,3 +82,4 @@ if __name__ == "__main__":
         print(f"DEBUG Telegram: {resp.status_code} - {resp.text}")
     else:
         print("DEBUG: nessun segnale o token/chat mancante")
+
