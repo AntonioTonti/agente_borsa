@@ -10,6 +10,15 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+import inspect, os
+print("=== CODICE ESEGUITO ===")
+with open(__file__, "r", encoding="utf-8") as f:
+    for i, line in enumerate(f, 1):
+        if "sendMessage" in line:
+            print(f"{i:03d}: {line.rstrip()}")
+print("=== FINE ===")
+
+
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = "antonio.tonti@tiscali.it"
@@ -130,4 +139,5 @@ if __name__ == "__main__":
         payload = {"chat_id": chat_id, "text": testo, "parse_mode": "Markdown"}
         resp = requests.post(url, data=payload, timeout=10)
         print(f"DEBUG Telegram: status={resp.status_code}, text={resp.text}")
+
 
