@@ -125,6 +125,10 @@ if __name__ == "__main__":
     for ticker in portfolio:
         check_signals(ticker)
 
+print(f"DEBUG: token presente = {bool(TOKEN)}")
+print(f"DEBUG: chat_id presente = {bool(CHAT_ID)}")
+
+    
     print(f"DEBUG: segnali trovati {len(SEGNALI_ODIERNI)}")
 
     # invio su Telegram
@@ -139,5 +143,6 @@ if __name__ == "__main__":
         payload = {"chat_id": chat_id, "text": testo, "parse_mode": "Markdown"}
         resp = requests.post(url, data=payload, timeout=10)
         print(f"DEBUG Telegram: status={resp.status_code}, text={resp.text}")
+
 
 
