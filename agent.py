@@ -130,3 +130,4 @@ if __name__ == "__main__":
         payload = {"chat_id": chat_id, "text": testo, "parse_mode": "Markdown"}
         resp = requests.post(url, data=payload, timeout=10)
         print(f"DEBUG Telegram: status={resp.status_code}, text={resp.text}")
+
