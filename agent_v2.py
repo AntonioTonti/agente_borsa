@@ -71,12 +71,10 @@ def download_ticker_data(ticker: str, period: str = "6mo", interval: str = "1d")
             print(f"⚠️  {ticker}: Nessun dato disponibile")
             return None
         
-        # yfinance restituisce un DataFrame MultiIndex con colonne [Open, High, Low, Close, Adj Close, Volume]
+        # yfinance restituisce un DataFrame MultiIndex
         # Convertiamo in DataFrame normale se necessario
         if isinstance(df.columns, pd.MultiIndex):
-            # Prendiamo solo le colonne OHLC
             df = df[['Open', 'High', 'Low', 'Close']]
-            # Se è ancora MultiIndex, flatten
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
         
@@ -138,37 +136,96 @@ def analyze_zigzag_direction(df: pd.DataFrame, depth: int = ZIGZAG_DEPTH) -> str
         return "FLAT"
 
 
-def detect_ma_crossover(df: pd.DataFrame) -> Optional[int]:
+def detect_ma_ema_crossover(df: pd.DataFrame) -> Optional[str]:
     """
-    Rileva incroci tra MA31 ed EMA10.
+    Rileva incroci tra MA31 (rossa) ed EMA10 (verde).
+    
+    Regole:
+    - UP: EMA10 > MA31 (verde sopra rossa)
+    - DOWN: MA31 > EMA10 (rossa sopra verde)
+    
+    Ritorna:
+    - "UP" se crossover rialzista (EMA passa sopra MA)
+    - "DOWN" se crossover ribassista (MA passa sopra EMA)
+    - "NO_CROSS" se non c'è incrocio
+    - None in caso di errore
     """
     try:
         close_prices = df['Close']
         
-        # Assicuriamoci che sia una Series 1D
-        if isinstance(close_prices, pd.DataFrame):
-            close_prices = close_prices.squeeze()
+        if len(close_prices) < 32:  # Abbiamo bisogno di almeno 32 giorni per MA31
+            return None
         
-        # Calcola medie mobili
+        # Calcola MA31 (rossa) e EMA10 (verde)
         ma31 = ta.trend.sma_indicator(close_prices, window=31)
         ema10 = ta.trend.ema_indicator(close_prices, window=10)
         
-        # Identifica crossover (usa il penultimo valore per il confronto)
-        if len(ma31) > 1 and len(ema10) > 1:
-            # Confronta le ultime due posizioni
-            ma_above_ema_prev = ma31.iloc[-2] > ema10.iloc[-2]
-            ma_above_ema_now = ma31.iloc[-1] > ema10.iloc[-1]
-            
-            # Crossover rialzista: MA passa sotto a sopra EMA
-            if not ma_above_ema_prev and ma_above_ema_now:
-                return 1
-            # Crossover ribassista: MA passa sopra a sotto EMA
-            elif ma_above_ema_prev and not ma_above_ema_now:
-                return -1
+        # Prendi gli ultimi 2 valori per rilevare il crossover
+        if len(ma31) < 2 or len(ema10) < 2:
+            return None
         
-        return 0
+        # Valori attuali
+        ma31_current = float(ma31.iloc[-1])
+        ema10_current = float(ema10.iloc[-1])
+        
+        # Valori del giorno precedente
+        ma31_prev = float(ma31.iloc[-2])
+        ema10_prev = float(ema10.iloc[-2])
+        
+        # Rileva crossover
+        # Crossover UP: EMA passa sopra MA
+        if ema10_prev <= ma31_prev and ema10_current > ma31_current:
+            return "UP"
+        
+        # Crossover DOWN: MA passa sopra EMA
+        elif ma31_prev <= ema10_prev and ma31_current > ema10_current:
+            return "DOWN"
+        
+        # Se non c'è incrocio, mostra solo la posizione attuale
+        # Ma solo se è cambiata rispetto al giorno prima
+        if ema10_current > ma31_current and ema10_prev <= ma31_prev:
+            return "UP"
+        elif ma31_current > ema10_current and ma31_prev <= ema10_prev:
+            return "DOWN"
+        
+        return "NO_CROSS"
+        
     except Exception as e:
-        print(f"⚠️  Errore nel rilevamento crossover MA: {e}")
+        print(f"⚠️  Errore nel rilevamento crossover MA/EMA: {e}")
+        return None
+
+
+def get_ma_ema_position(df: pd.DataFrame) -> Optional[str]:
+    """
+    Ottiene la posizione attuale tra MA31 e EMA10.
+    
+    Ritorna:
+    - "UP" se EMA10 > MA31 (verde sopra rossa)
+    - "DOWN" se MA31 > EMA10 (rossa sopra verde)
+    - None in caso di errore
+    """
+    try:
+        close_prices = df['Close']
+        
+        if len(close_prices) < 32:
+            return None
+        
+        ma31 = ta.trend.sma_indicator(close_prices, window=31)
+        ema10 = ta.trend.ema_indicator(close_prices, window=10)
+        
+        if len(ma31) == 0 or len(ema10) == 0:
+            return None
+        
+        ma31_current = float(ma31.iloc[-1])
+        ema10_current = float(ema10.iloc[-1])
+        
+        if ema10_current > ma31_current:
+            return "UP"
+        else:
+            return "DOWN"
+            
+    except Exception as e:
+        print(f"⚠️  Errore nel calcolo posizione MA/EMA: {e}")
         return None
 
 
@@ -185,11 +242,20 @@ def analyze_ticker_signals(ticker: str) -> List[str]:
     
     try:
         # 1. Analisi crossover MA31/EMA10
-        ma_signal = detect_ma_crossover(df)
-        if ma_signal == 1:
-            signals.append("🟢 Incrocio rialzista MA31/EMA10")
-        elif ma_signal == -1:
-            signals.append("🔴 Incrocio ribassista MA31/EMA10")
+        crossover_signal = detect_ma_ema_crossover(df)
+        ma_ema_position = get_ma_ema_position(df)
+        
+        # Se c'è un crossover, lo segnaliamo
+        if crossover_signal == "UP":
+            signals.append("📈 CROSSOVER UP: EMA10 > MA31")
+        elif crossover_signal == "DOWN":
+            signals.append("📉 CROSSOVER DOWN: MA31 > EMA10")
+        
+        # Mostriamo sempre la posizione attuale (anche se non c'è crossover)
+        if ma_ema_position == "UP":
+            signals.append("🟢 EMA10 > MA31 (Verde sopra Rossa)")
+        elif ma_ema_position == "DOWN":
+            signals.append("🔴 MA31 > EMA10 (Rossa sopra Verde)")
         
         # 2. Analisi direzione ZigZag
         zz_dir = analyze_zigzag_direction(df)
@@ -198,9 +264,8 @@ def analyze_ticker_signals(ticker: str) -> List[str]:
         
         # 3. Analisi Heikin Ashi (cambio colore)
         if len(df) > 2:
-            # Calcola colore attuale e precedente
-            color_current = calculate_heikin_ashi_color(df.iloc[-2:])  # Ultime due per avere precedente
-            color_previous = calculate_heikin_ashi_color(df.iloc[-3:-1])  # Due prima
+            color_current = calculate_heikin_ashi_color(df.iloc[-2:])
+            color_previous = calculate_heikin_ashi_color(df.iloc[-3:-1])
             
             if color_current != color_previous and color_current != "UNKNOWN":
                 signals.append(f"🕯️ Heikin Ashi: {color_current}")
@@ -351,4 +416,3 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
-
