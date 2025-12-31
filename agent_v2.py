@@ -42,12 +42,6 @@ ZIGZAG_DEPTH = 10     # Profondità analisi ZigZag
 def load_portfolio(filename: str = PORTFOLIO_FILE) -> List[str]:
     """
     Carica la lista dei ticker dal file portfolio.
-    
-    Args:
-        filename: Nome del file contenente i ticker
-        
-    Returns:
-        Lista di ticker in maiuscolo
     """
     try:
         with open(filename, 'r') as f:
@@ -68,14 +62,6 @@ def load_portfolio(filename: str = PORTFOLIO_FILE) -> List[str]:
 def download_ticker_data(ticker: str, period: str = "6mo", interval: str = "1d") -> Optional[pd.DataFrame]:
     """
     Scarica i dati del ticker da Yahoo Finance.
-    
-    Args:
-        ticker: Simbolo del titolo
-        period: Periodo storico (es. "6mo", "1y")
-        interval: Intervallo temporale (es. "1d", "1h")
-        
-    Returns:
-        DataFrame con i dati o None in caso di errore
     """
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False)
@@ -83,14 +69,16 @@ def download_ticker_data(ticker: str, period: str = "6mo", interval: str = "1d")
         if df.empty:
             print(f"⚠️  {ticker}: Nessun dato disponibile")
             return None
-            
-        # Verifica che abbiamo tutte le colonne necessarie
-        required_columns = ['Open', 'High', 'Low', 'Close']
-        for col in required_columns:
-            if col not in df.columns:
-                print(f"❌ {ticker}: Colonna {col} mancante")
-                return None
-                
+        
+        # yfinance restituisce un DataFrame MultiIndex con colonne [Open, High, Low, Close, Adj Close, Volume]
+        # Convertiamo in DataFrame normale se necessario
+        if isinstance(df.columns, pd.MultiIndex):
+            # Prendiamo solo le colonne OHLC
+            df = df[['Open', 'High', 'Low', 'Close']]
+            # Se è ancora MultiIndex, flatten
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+        
         return df
     except Exception as e:
         print(f"❌ {ticker}: Errore nel download dati - {e}")
@@ -100,25 +88,18 @@ def download_ticker_data(ticker: str, period: str = "6mo", interval: str = "1d")
 def calculate_heikin_ashi_color(df: pd.DataFrame) -> str:
     """
     Calcola il colore della candela Heikin Ashi.
-    
-    Args:
-        df: DataFrame con dati OHLC
-        
-    Returns:
-        "BULL" se bullish, "BEAR" se bearish
     """
     try:
-        # Calcola Heikin Ashi Close
-        ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
+        if len(df) < 2:
+            return "UNKNOWN"
+            
+        # Calcola Heikin Ashi Close (ultima candela)
+        ha_close = (df['Open'].iloc[-1] + df['High'].iloc[-1] + df['Low'].iloc[-1] + df['Close'].iloc[-1]) / 4
         
-        # Calcola Heikin Ashi Open
-        ha_open = (df['Open'].shift(1) + df['Close'].shift(1)) / 2
+        # Calcola Heikin Ashi Open (candela precedente)
+        ha_open = (df['Open'].iloc[-2] + df['Close'].iloc[-2]) / 2
         
-        # Ultimi valori
-        last_ha_close = ha_close.iloc[-1]
-        last_ha_open = ha_open.iloc[-1]
-        
-        return "BULL" if last_ha_close > last_ha_open else "BEAR"
+        return "BULL" if ha_close > ha_open else "BEAR"
     except Exception as e:
         print(f"⚠️  Errore nel calcolo Heikin Ashi: {e}")
         return "UNKNOWN"
@@ -127,13 +108,6 @@ def calculate_heikin_ashi_color(df: pd.DataFrame) -> str:
 def analyze_zigzag_direction(df: pd.DataFrame, depth: int = ZIGZAG_DEPTH) -> str:
     """
     Analizza la direzione ZigZag basata sui massimi/minimi recenti.
-    
-    Args:
-        df: DataFrame con dati OHLC
-        depth: Numero di giorni da analizzare
-        
-    Returns:
-        "UP", "DOWN" o "FLAT"
     """
     try:
         close_prices = df['Close']
@@ -142,11 +116,11 @@ def analyze_zigzag_direction(df: pd.DataFrame, depth: int = ZIGZAG_DEPTH) -> str
             depth = len(close_prices)
             
         recent_prices = close_prices.tail(depth)
-        current_price = close_prices.iloc[-1]
+        current_price = float(close_prices.iloc[-1])
         
         # Calcola massimo e minimo del periodo recente
-        recent_max = recent_prices.max()
-        recent_min = recent_prices.min()
+        recent_max = float(recent_prices.max())
+        recent_min = float(recent_prices.min())
         
         # Soglie per determinare la direzione
         up_threshold = recent_max * 0.98
@@ -166,43 +140,40 @@ def analyze_zigzag_direction(df: pd.DataFrame, depth: int = ZIGZAG_DEPTH) -> str
 def detect_ma_crossover(df: pd.DataFrame) -> Optional[int]:
     """
     Rileva incroci tra MA31 ed EMA10.
-    
-    Args:
-        df: DataFrame con dati OHLC
-        
-    Returns:
-        1 per crossover rialzista, -1 per ribassista, 0 per nessun cambio, None per errore
     """
     try:
         close_prices = df['Close']
+        
+        # Assicuriamoci che sia una Series 1D
+        if isinstance(close_prices, pd.DataFrame):
+            close_prices = close_prices.squeeze()
         
         # Calcola medie mobili
         ma31 = ta.trend.sma_indicator(close_prices, window=31)
         ema10 = ta.trend.ema_indicator(close_prices, window=10)
         
-        # Identifica crossover
-        position = np.where(ma31 > ema10, 1, 0)
-        crossover_signal = pd.Series(position).diff().iloc[-1]
+        # Identifica crossover (usa il penultimo valore per il confronto)
+        if len(ma31) > 1 and len(ema10) > 1:
+            # Confronta le ultime due posizioni
+            ma_above_ema_prev = ma31.iloc[-2] > ema10.iloc[-2]
+            ma_above_ema_now = ma31.iloc[-1] > ema10.iloc[-1]
+            
+            # Crossover rialzista: MA passa sotto a sopra EMA
+            if not ma_above_ema_prev and ma_above_ema_now:
+                return 1
+            # Crossover ribassista: MA passa sopra a sotto EMA
+            elif ma_above_ema_prev and not ma_above_ema_now:
+                return -1
         
-        return int(crossover_signal) if not pd.isna(crossover_signal) else 0
+        return 0
     except Exception as e:
         print(f"⚠️  Errore nel rilevamento crossover MA: {e}")
         return None
 
 
-# ============================================================================
-# ANALISI SEGNALI
-# ============================================================================
-
 def analyze_ticker_signals(ticker: str) -> List[str]:
     """
     Analizza un singolo ticker e restituisce i segnali rilevati.
-    
-    Args:
-        ticker: Simbolo del titolo
-        
-    Returns:
-        Lista di segnali rilevati (descrizioni)
     """
     signals = []
     
@@ -224,13 +195,13 @@ def analyze_ticker_signals(ticker: str) -> List[str]:
         if zz_dir != "FLAT":
             signals.append(f"📊 ZigZag: {zz_dir}")
         
-        # 3. Analisi Heikin Ashi
-        # Calcola colore attuale e precedente
-        if len(df) > 1:
-            color_current = calculate_heikin_ashi_color(df.iloc[-1:])
-            color_previous = calculate_heikin_ashi_color(df.iloc[-2:-1])
+        # 3. Analisi Heikin Ashi (cambio colore)
+        if len(df) > 2:
+            # Calcola colore attuale e precedente
+            color_current = calculate_heikin_ashi_color(df.iloc[-2:])  # Ultime due per avere precedente
+            color_previous = calculate_heikin_ashi_color(df.iloc[-3:-1])  # Due prima
             
-            if color_current != color_previous:
+            if color_current != color_previous and color_current != "UNKNOWN":
                 signals.append(f"🕯️ Heikin Ashi: {color_current}")
         
         return signals
@@ -247,14 +218,6 @@ def analyze_ticker_signals(ticker: str) -> List[str]:
 def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
     """
     Invia un messaggio a Telegram.
-    
-    Args:
-        token: Token del bot Telegram
-        chat_id: ID della chat
-        message: Messaggio da inviare
-        
-    Returns:
-        True se inviato con successo, False altrimenti
     """
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -285,12 +248,6 @@ def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
 def format_signals_for_telegram(ticker_signals: Dict[str, List[str]]) -> str:
     """
     Formatta i segnali per l'invio su Telegram.
-    
-    Args:
-        ticker_signals: Dizionario {ticker: [segnali]}
-        
-    Returns:
-        Messaggio formattato per Telegram
     """
     if not ticker_signals:
         return "📭 Nessun segnale rilevato"
@@ -319,6 +276,7 @@ def main():
     Funzione principale dell'agente di trading.
     """
     print(f"🤖 Avvio Agente Borsa - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Python: {sys.version}")
     
     # Carica credenziali Telegram
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -338,24 +296,25 @@ def main():
     
     # Analizza ogni ticker
     all_signals = {}
-    signals_found = 0
+    tickers_with_signals = 0
     
     for ticker in portfolio:
         signals = analyze_ticker_signals(ticker)
         
         if signals:
             all_signals[ticker] = signals
-            signals_found += len(signals)
+            tickers_with_signals += 1
             
             # Log nel terminale
             time_str = datetime.now().strftime('%Y-%m-%d %H:%M')
             print(f"{time_str} 📬 {ticker}: {' | '.join(signals)}")
     
     # Riepilogo
+    total_signals = sum(len(s) for s in all_signals.values())
     print(f"\n📊 Riepilogo:")
     print(f"   Titoli analizzati: {len(portfolio)}")
-    print(f"   Titoli con segnali: {len(all_signals)}")
-    print(f"   Segnali totali: {signals_found}")
+    print(f"   Titoli con segnali: {tickers_with_signals}")
+    print(f"   Segnali totali: {total_signals}")
     
     # Invia a Telegram se ci sono segnali e le credenziali sono valide
     if all_signals and telegram_token and telegram_chat_id:
@@ -365,7 +324,7 @@ def main():
         success = send_telegram_message(telegram_token, telegram_chat_id, message)
         
         if success:
-            print("✅ Segnali inviati con successo a Telegram")
+            print(f"✅ Messaggio inviato a Telegram: {tickers_with_signals} titoli, {total_signals} segnali")
         else:
             print("❌ Invio a Telegram fallito")
     elif all_signals and (not telegram_token or not telegram_chat_id):
