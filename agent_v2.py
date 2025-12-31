@@ -141,8 +141,8 @@ def detect_ma_ema_crossover(df: pd.DataFrame) -> Optional[str]:
     Rileva incroci tra MA31 (rossa) ed EMA10 (verde).
     
     Regole:
-    - UP: EMA10 > MA31 (verde sopra rossa)
-    - DOWN: MA31 > EMA10 (rossa sopra verde)
+    - UP: EMA10 > MA31 (verde)
+    - DOWN: MA31 > EMA10 (rossa)
     
     Ritorna:
     - "UP" se crossover rialzista (EMA passa sopra MA)
@@ -200,8 +200,8 @@ def get_ma_ema_position(df: pd.DataFrame) -> Optional[str]:
     Ottiene la posizione attuale tra MA31 e EMA10.
     
     Ritorna:
-    - "UP" se EMA10 > MA31 (verde sopra rossa)
-    - "DOWN" se MA31 > EMA10 (rossa sopra verde)
+    - "UP" se EMA10 > MA31 (verde)
+    - "DOWN" se MA31 > EMA10 (rossa)
     - None in caso di errore
     """
     try:
@@ -253,9 +253,9 @@ def analyze_ticker_signals(ticker: str) -> List[str]:
         
         # Mostriamo sempre la posizione attuale (anche se non c'è crossover)
         if ma_ema_position == "UP":
-            signals.append("🟢 EMA10 > MA31 (Verde sopra Rossa)")
+            signals.append("🟢 EMA10 > MA31 (Verde)")
         elif ma_ema_position == "DOWN":
-            signals.append("🔴 MA31 > EMA10 (Rossa sopra Verde)")
+            signals.append("🔴 MA31 > EMA10 (Rossa)")
         
         # 2. Analisi direzione ZigZag
         zz_dir = analyze_zigzag_direction(df)
@@ -416,3 +416,4 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
