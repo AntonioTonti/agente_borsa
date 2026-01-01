@@ -15,19 +15,19 @@ from typing import List, Dict, Optional, Tuple
 # Dizionario dei ticker con descrizioni
 TICKER_DESCRIPTIONS = {
     "STM": "STMicroelectronics N.V.",
-    "SPM.MI": "Saipem S.p.A.",
-    "AMP.MI": "Amplifon S.p.A.",
-    "ZV.MI": "Zignago Vetro S.p.A.",
-    "NEXI.MI": "Nexi S.p.A.",
-    "TIT.MI": "Telecom Italia S.p.A.",
-    "BSS.MI": "Biesse S.p.A.",
-    "TSL.MI": "Tessellis S.p.A.",
-    "PRY.MI": "Prysmian S.p.A.",
-    "REC.MI": "Recordati S.p.A.",
-    "WBD.MI": "Webuild S.p.A.",
-    "CPR.MI": "Campari S.p.A.",
-    "FCT.MI": "Fincantieri S.p.A.",
-    "PIRC.MI": "Pirelli S.p.A.",
+    "SPM.MI": "Saipem",
+    "AMP.MI": "Amplifon",
+    "ZV.MI": "Zignago Vetro",
+    "NEXI.MI": "Nexi",
+    "TIT.MI": "Telecom Italia",
+    "BSS.MI": "Biesse",
+    "TSL.MI": "Tessellis",
+    "PRY.MI": "Prysmian",
+    "REC.MI": "Recordati",
+    "WBD.MI": "Webuild",
+    "CPR.MI": "Campari",
+    "FCT.MI": "Fincantieri",
+    "PIRC.MI": "Pirelli"
     "RACE.MI": "Ferrari"
 }
 
@@ -349,7 +349,7 @@ def analyze_ticker_signals(ticker: str) -> Dict[str, List[str]]:
         "zigzag": [segnali ZigZag],
         "heikin": [segnali Heikin Ashi],
         "indice": (indice, [dettagli]),
-        "link": link_yahoo
+        "description": descrizione_ticker
     }
     """
     signals = {
@@ -357,7 +357,7 @@ def analyze_ticker_signals(ticker: str) -> Dict[str, List[str]]:
         "zigzag": [],
         "heikin": [],
         "indice": ("", []),
-        "link": f"https://finance.yahoo.com/quote/{ticker}/chart?p={ticker}"
+        "description": TICKER_DESCRIPTIONS.get(ticker, ticker)
     }
     
     # Scarica dati (1 anno)
@@ -414,9 +414,9 @@ def format_ticker_signals_for_telegram(ticker: str, signals: Dict[str, List[str]
     """
     parts = []
     
-    # Titolo con link
-    description = TICKER_DESCRIPTIONS.get(ticker, ticker)
-    ticker_line = f"*[{ticker}]({signals['link']})* – {description}"
+    # Solo descrizione (senza ticker e senza link)
+    description = signals.get("description", ticker)
+    ticker_line = f"*{description}*"
     parts.append(ticker_line)
     
     # Indice Composito (prima cosa)
@@ -433,10 +433,6 @@ def format_ticker_signals_for_telegram(ticker: str, signals: Dict[str, List[str]
     if all_signals:
         parts.append("\n".join(all_signals))
     
-    # Dettagli indice (se richiesti)
-    # if index_details:
-    #     parts.append("\n".join([f"• {detail}" for detail in index_details[:3]]))
-    
     return "\n".join(parts)
 
 
@@ -451,9 +447,9 @@ def format_all_signals_for_telegram(portfolio_signals: Dict[str, Dict], osservat
     
     # Sezione PORTAFOGLIO
     if portfolio_signals:
-        message_parts.append("═══════════════════════════════")
+        message_parts.append("════════════════════════")
         message_parts.append("*📊 PORTAFOGLIO*")
-        message_parts.append("═══════════════════════════════")
+        message_parts.append("════════════════════════")
         
         for ticker, signals in portfolio_signals.items():
             formatted = format_ticker_signals_for_telegram(ticker, signals)
@@ -462,9 +458,9 @@ def format_all_signals_for_telegram(portfolio_signals: Dict[str, Dict], osservat
     
     # Sezione OSSERVATI
     if osservati_signals:
-        message_parts.append("═══════════════════════════════")
+        message_parts.append("════════════════════════")
         message_parts.append("*👀 OSSERVATI*")
-        message_parts.append("═══════════════════════════════")
+        message_parts.append("════════════════════════")
         
         for ticker, signals in osservati_signals.items():
             formatted = format_ticker_signals_for_telegram(ticker, signals)
@@ -489,7 +485,7 @@ def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
             "chat_id": chat_id,
             "text": message,
             "parse_mode": "Markdown",
-            "disable_web_page_preview": False  # Abilitato per vedere i link
+            "disable_web_page_preview": True  # Disabilitato visto che non ci sono link
         }
         
         response = requests.post(url, json=payload, timeout=15)
@@ -549,9 +545,10 @@ def main():
                 portfolio_signals[ticker] = signals
                 # Log nel terminale
                 time_str = datetime.now().strftime('%H:%M')
+                description = signals.get("description", ticker)
                 ma_ema_str = " | ".join(signals.get("ma_ema", []))
                 if ma_ema_str:
-                    print(f"{time_str} 📬 {ticker}: {ma_ema_str}")
+                    print(f"{time_str} 📬 {description}: {ma_ema_str}")
     
     # Analizza OSSERVATI
     if sections["OSSERVATI"]:
@@ -562,9 +559,10 @@ def main():
                 osservati_signals[ticker] = signals
                 # Log nel terminale
                 time_str = datetime.now().strftime('%H:%M')
+                description = signals.get("description", ticker)
                 ma_ema_str = " | ".join(signals.get("ma_ema", []))
                 if ma_ema_str:
-                    print(f"{time_str} 👁️ {ticker}: {ma_ema_str}")
+                    print(f"{time_str} 👁️ {description}: {ma_ema_str}")
     
     # Riepilogo
     print(f"\n📈 RIEPILOGO:")
