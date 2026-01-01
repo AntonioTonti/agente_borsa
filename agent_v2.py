@@ -27,7 +27,7 @@ TICKER_DESCRIPTIONS = {
     "WBD.MI": "Webuild",
     "CPR.MI": "Campari",
     "FCT.MI": "Fincantieri",
-    "PIRC.MI": "Pirelli"
+    "PIRC.MI": "Pirelli",
     "RACE.MI": "Ferrari"
 }
 
@@ -606,3 +606,4 @@ if __name__ == "__main__":
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
