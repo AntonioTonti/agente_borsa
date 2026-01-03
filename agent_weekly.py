@@ -294,7 +294,7 @@ class MediumTermAnalyzer:
             
             # Market Cap
             market_cap = info.get('marketCap', 0)
-            if market_cap > 1e9:  > 1 miliardo
+            if market_cap > 1e9:  # > 1 miliardo
                 score += 0.05
             
             # Profit Margins
