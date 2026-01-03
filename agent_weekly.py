@@ -299,7 +299,7 @@ class MediumTermAnalyzer:
             
             # Profit Margins
             profit_margins = info.get('profitMargins', 0)
-            if profit_margins and profit_margins > 0.1:  > 10%
+            if profit_margins and profit_margins > 0.1:  # > 10%
                 score += 0.1
             
             score = max(0.1, min(0.9, score))
@@ -366,7 +366,7 @@ def format_weekly_analysis(results: List[Dict], group_name: str) -> str:
     
     lines = []
     lines.append(f"\n{group_name}")
-    lines.append("=" * 40)
+    lines.append("-" * 40)
     
     for result in sorted_results:
         ticker = result['ticker']
@@ -438,8 +438,8 @@ def main():
     portfolio = load_tickers("portfolio.txt")
     watchlist = load_tickers("watchlist.txt")
     
-    print(f"🔴 Portafoglio: {len(portfolio)} titoli")
-    print(f"🟢 Watchlist: {len(watchlist)} titoli")
+    print(f"Portafoglio: {len(portfolio)} titoli")
+    print(f"Watchlist: {len(watchlist)} titoli")
     
     # Analisi
     analyzer = MediumTermAnalyzer()
@@ -490,10 +490,10 @@ def main():
     message = header + "\n" + "\n".join(stats) + "\n"
     
     # Aggiungi analisi portafoglio (PEGGIORI prima)
-    message += format_weekly_analysis(portfolio_results, "🔴 PORTAFOGLIO ATTIVO (dal peggiore)")
+    message += format_weekly_analysis(portfolio_results, "PORTAFOGLIO ATTIVO (dal peggiore)")
     
     # Aggiungi analisi watchlist (PEGGIORI prima)
-    message += format_weekly_analysis(watchlist_results, "\n🟢 WATCHLIST (dal peggiore)")
+    message += format_weekly_analysis(watchlist_results, "\nWATCHLIST (dal peggiore)")
     
     # Footer
     message += "\n\n" + "=" * 40
