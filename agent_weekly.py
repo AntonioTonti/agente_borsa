@@ -560,14 +560,30 @@ def main():
     message += "🟢🟢 FORTE ACQUISTO (score > 0.65)\n"
     
     # Invia
+    # Telegram
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     
     if token and chat_id:
         print("\n📤 Invio report a Telegram...")
-        success = send_telegram_report(token, chat_id, message)
-        if success:
-            print("✅ Report inviato con successo!")
+        
+        # 1. Prepara e invia PORTAFOGLIO
+        if portfolio_results:
+            port_header = f"📈 *REPORT PORTAFOGLIO - {datetime.now().strftime('%d/%m/%Y')}*\n"
+            port_message = port_header + format_weekly_analysis(portfolio_results, "💰 PORTAFOGLIO ATTIVO", descriptions)
+            print(f"📤 Invio portafoglio ({len(port_message)} caratteri)...")
+            send_telegram_message(token, chat_id, port_message, use_markdown=True)
+        
+        # Pausa di 3 secondi tra i messaggi
+        import time
+        time.sleep(3)
+        
+        # 2. Prepara e invia WATCHLIST
+        if watchlist_results:
+            watch_header = f"📈 *REPORT WATCHLIST - {datetime.now().strftime('%d/%m/%Y')}*\n"
+            watch_message = watch_header + format_weekly_analysis(watchlist_results, "👁️  WATCHLIST", descriptions)
+            print(f"📤 Invio watchlist ({len(watch_message)} caratteri)...")
+            send_telegram_message(token, chat_id, watch_message, use_markdown=True)
         else:
             print("❌ Errore nell'invio")
     else:
