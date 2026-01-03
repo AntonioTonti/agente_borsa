@@ -2,16 +2,22 @@
 """
 Agente di Trading - Analisi Settimanale Completa
 Invio: Venerdì 18:00 UTC (19:00 IT)
+FEATURES:
+- Analisi separata per Portafoglio e Watchlist
+- Due invii Telegram distinti
+- Gestione errori robusta
+- Logging dettagliato
 """
 
 import os
 import sys
+import time
 from datetime import datetime
 import requests
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -27,7 +33,7 @@ from config import (
 # ============================================================================
 
 class MediumTermAnalyzer:
-    """Analizzatore completo per medio termine (3-12 meses)"""
+    """Analizzatore completo per medio termine (3-12 mesi)"""
     
     def __init__(self):
         self.thresholds = load_config()
@@ -41,42 +47,63 @@ class MediumTermAnalyzer:
             'fibonacci': 0.10,      # Livelli tecnici
             'fundamental': 0.10     # Dati fondamentali
         }
+        
+        # Cache per dati già scaricati
+        self.data_cache = {}
     
     def download_data(self, ticker: str) -> Optional[pd.DataFrame]:
-        """Scarica dati settimanali"""
+        """Scarica dati settimanali con cache e gestione errori"""
+        if ticker in self.data_cache:
+            return self.data_cache[ticker]
+        
         try:
-            df = yf.download(ticker, period=WEEKLY_PERIOD, 
-                            interval=WEEKLY_INTERVAL, progress=False, timeout=30)
+            print(f"    📥 Download {ticker}...", end="", flush=True)
+            df = yf.download(
+                ticker, 
+                period=WEEKLY_PERIOD, 
+                interval=WEEKLY_INTERVAL, 
+                progress=False, 
+                timeout=60,
+                threads=True
+            )
             
             if df.empty:
-                print(f"    ⚠️  {ticker}: DataFrame vuoto")
+                print(" ❌ VUOTO")
                 return None
             
-            # Controllo più flessibile
-            if len(df) < WEEKLY_MIN_POINTS:
-                print(f"    ⚠️  {ticker}: Solo {len(df)} righe (minimo: {WEEKLY_MIN_POINTS})")
-                # Potresti decidere di ritornare comunque df con un warning
-                # return df  # ← prova questo se il problema persiste
+            # Log dettagliato
+            print(f" ✅ {len(df)} righe")
             
-            # Pulizia
+            # Controllo flessibile sui dati minimi
+            if len(df) < max(10, WEEKLY_MIN_POINTS // 2):
+                print(f"    ⚠️  {ticker}: Dati limitati ({len(df)} righe)")
+                # Continua comunque con i dati disponibili
+            
+            # Pulizia dati
             if isinstance(df.columns, pd.MultiIndex):
                 df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
             
+            # Cache dei dati
+            self.data_cache[ticker] = df
             return df
+            
         except Exception as e:
-            print(f"    ❌ {ticker}: Errore download - {str(e)[:100]}")
+            print(f" ❌ ERRORE: {str(e)[:80]}")
             return None
     
     def analyze_ichimoku(self, df: pd.DataFrame) -> Tuple[str, float]:
         """Analisi Ichimoku Cloud"""
         try:
+            if len(df) < 52:
+                return ("ICHIMOKU: Dati insufficienti", 0.5)
+            
             high = df['High']
             low = df['Low']
             close = df['Close']
             
-            # Calcolo componenti Ichimoku (semplificato)
+            # Calcolo componenti Ichimoku
             tenkan = (high.rolling(9).max() + low.rolling(9).min()) / 2
             kijun = (high.rolling(26).max() + low.rolling(26).min()) / 2
             senkou_a = (tenkan + kijun) / 2
@@ -101,21 +128,24 @@ class MediumTermAnalyzer:
             else:
                 return ("DENTRO CLOUD", 0.5)
                 
-        except:
-            return ("ICHIMOKU N/A", 0.5)
+        except Exception as e:
+            print(f"      ⚠️  Ichimoku error: {str(e)[:50]}")
+            return ("ICHIMOKU: Errore analisi", 0.5)
     
     def analyze_moving_averages(self, df: pd.DataFrame) -> Tuple[str, float]:
         """Analisi medie mobili settimanali"""
         try:
             close = df['Close']
+            if len(close) < 50:
+                return ("MA: Dati insufficienti", 0.5)
+            
             import ta
             
-            # Medie chiave per medio termine
-            ema21 = ta.trend.ema_indicator(close, window=21)  # ~5 meses
-            sma50 = ta.trend.sma_indicator(close, window=50)  # ~1 anno
+            ema21 = ta.trend.ema_indicator(close, window=21)
+            sma50 = ta.trend.sma_indicator(close, window=50)
             
             if len(ema21) < 3 or len(sma50) < 3:
-                return ("MA INSUFFICIENTI", 0.5)
+                return ("MA: Calcolo fallito", 0.5)
             
             ema_now = float(ema21.iloc[-1])
             sma_now = float(sma50.iloc[-1])
@@ -123,26 +153,33 @@ class MediumTermAnalyzer:
             sma_prev = float(sma50.iloc[-2])
             
             # Distanza percentuale
-            distance = abs((ema_now - sma_now) / sma_now * 100)
-            distance_score = min(0.8, distance / 20)
+            distance = ((ema_now - sma_now) / sma_now * 100)
+            distance_score = min(0.8, abs(distance) / 20)
             
             # Segnale
             if ema_now > sma_now and ema_prev <= sma_prev:
                 return (f"CROSSOVER BULLISH (+{distance:.1f}%)", 0.5 + distance_score)
             elif sma_now > ema_now and sma_prev <= ema_prev:
-                return (f"CROSSOVER BEARISH (-{distance:.1f}%)", 0.5 - distance_score)
+                return (f"CROSSOVER BEARISH ({distance:.1f}%)", 0.5 - distance_score)
             elif ema_now > sma_now:
                 return (f"EMA21 > SMA50 (+{distance:.1f}%)", 0.5 + distance_score/2)
             else:
-                return (f"SMA50 > EMA21 (-{distance:.1f}%)", 0.5 - distance_score/2)
+                return (f"SMA50 > EMA21 ({distance:.1f}%)", 0.5 - distance_score/2)
                 
-        except:
-            return ("MA ERROR", 0.5)
+        except Exception as e:
+            print(f"      ⚠️  MA error: {str(e)[:50]}")
+            return ("MA: Errore analisi", 0.5)
     
     def analyze_momentum(self, df: pd.DataFrame) -> Tuple[str, float]:
         """Analisi momentum (RSI + MACD + ADX)"""
         try:
             close = df['Close']
+            high = df['High']
+            low = df['Low']
+            
+            if len(close) < 20:
+                return ("MOMENTUM: Dati insufficienti", 0.5)
+            
             import ta
             
             # RSI settimanale
@@ -155,7 +192,7 @@ class MediumTermAnalyzer:
             signal_line = macd.macd_signal()
             
             # ADX (forza trend)
-            adx = ta.trend.adx(df['High'], df['Low'], close, window=14)
+            adx = ta.trend.adx(high, low, close, window=14)
             adx_val = float(adx.iloc[-1]) if len(adx) > 0 else 25
             
             # Calcolo score
@@ -166,7 +203,7 @@ class MediumTermAnalyzer:
                 score += 0.1  # Neutrale
             elif rsi_val > 60:
                 score += 0.15 if rsi_val < 70 else 0.05
-            else:
+            elif rsi_val < 40:
                 score -= 0.15 if rsi_val > 30 else 0.05
             
             # MACD contributo
@@ -176,13 +213,13 @@ class MediumTermAnalyzer:
                 else:
                     score -= 0.1
             
-            # ADX contributo
+            # ADX contributo (trend forte = buono)
             if adx_val > 25:
                 score += 0.05
             if adx_val > 40:
                 score += 0.05
             
-            # Normalizza e descrivi
+            # Normalizza
             score = max(0.1, min(0.9, score))
             
             if score > 0.6:
@@ -192,8 +229,9 @@ class MediumTermAnalyzer:
             else:
                 return (f"MOMENTUM NEUTRO (ADX:{adx_val:.0f})", score)
                 
-        except:
-            return ("MOMENTUM ERROR", 0.5)
+        except Exception as e:
+            print(f"      ⚠️  Momentum error: {str(e)[:50]}")
+            return ("MOMENTUM: Errore analisi", 0.5)
     
     def analyze_volume(self, df: pd.DataFrame) -> Tuple[str, float]:
         """Analisi volume e liquidità"""
@@ -202,16 +240,22 @@ class MediumTermAnalyzer:
             close = df['Close']
             
             if len(volume) < 10:
-                return ("VOLUME INSUFF.", 0.5)
+                return ("VOLUME: Dati insufficienti", 0.5)
             
             # Volume medio ultime 10 settimane
             avg_volume = float(volume.tail(10).mean())
+            if avg_volume == 0:
+                return ("VOLUME: Media zero", 0.5)
+                
             current_volume = float(volume.iloc[-1])
             volume_ratio = current_volume / avg_volume
             
             # Prezzo ultime 2 settimane
-            price_change = ((float(close.iloc[-1]) - float(close.iloc[-2])) / 
-                           float(close.iloc[-2]) * 100)
+            if len(close) >= 2:
+                price_change = ((float(close.iloc[-1]) - float(close.iloc[-2])) / 
+                               float(close.iloc[-2]) * 100)
+            else:
+                price_change = 0
             
             # Valutazione
             if volume_ratio > 1.5 and price_change > 2:
@@ -225,8 +269,9 @@ class MediumTermAnalyzer:
             else:
                 return ("VOLUME NORMALE", 0.5)
                 
-        except:
-            return ("VOLUME ERROR", 0.5)
+        except Exception as e:
+            print(f"      ⚠️  Volume error: {str(e)[:50]}")
+            return ("VOLUME: Errore analisi", 0.5)
     
     def analyze_fibonacci(self, df: pd.DataFrame) -> Tuple[str, float]:
         """Analisi livelli Fibonacci"""
@@ -236,7 +281,7 @@ class MediumTermAnalyzer:
             close = df['Close']
             
             if len(df) < 52:
-                return ("FIB INSUFF.", 0.5)
+                return ("FIBONACCI: Dati insufficienti", 0.5)
             
             # Massimo e minimo ultimo anno
             yearly_high = float(high.tail(52).max())
@@ -246,12 +291,12 @@ class MediumTermAnalyzer:
             # Range
             total_range = yearly_high - yearly_low
             if total_range == 0:
-                return ("FIB NO RANGE", 0.5)
+                return ("FIBONACCI: Range zero", 0.5)
             
             # Posizione corrente
             position = (current - yearly_low) / total_range
             
-            # Livelli Fibonacci chiave
+            # Livelli Fibonacci
             fib_levels = {
                 0.236: "SUPPORTO FIB 23.6%",
                 0.382: "SUPPORTO FIB 38.2%",
@@ -275,13 +320,13 @@ class MediumTermAnalyzer:
             desc = fib_levels.get(closest_level, f"FIB {closest_level*100:.1f}%")
             return (f"{desc} ({position*100:.1f}%)", score)
             
-        except:
-            return ("FIB ERROR", 0.5)
+        except Exception as e:
+            print(f"      ⚠️  Fibonacci error: {str(e)[:50]}")
+            return ("FIBONACCI: Errore analisi", 0.5)
     
     def analyze_fundamental(self, ticker: str) -> Tuple[str, float]:
         """Analisi dati fondamentali (semplificata)"""
         try:
-            # Usa yfinance per dati fondamentali base
             stock = yf.Ticker(ticker)
             info = stock.info
             
@@ -297,18 +342,23 @@ class MediumTermAnalyzer:
             
             # Dividend Yield
             dividend_yield = info.get('dividendYield', 0)
-            if dividend_yield and dividend_yield > 0.02:  # > 2%
+            if dividend_yield and dividend_yield > 0.02:
                 score += 0.1
             
             # Market Cap
             market_cap = info.get('marketCap', 0)
-            if market_cap > 1e9:  # > 1 miliardo
+            if market_cap > 1e9:
                 score += 0.05
             
             # Profit Margins
             profit_margins = info.get('profitMargins', 0)
-            if profit_margins and profit_margins > 0.1:  # > 10%
+            if profit_margins and profit_margins > 0.1:
                 score += 0.1
+            
+            # Debt to Equity
+            debt_to_equity = info.get('debtToEquity', 0)
+            if debt_to_equity and debt_to_equity < 1.0:
+                score += 0.05
             
             score = max(0.1, min(0.9, score))
             
@@ -319,285 +369,459 @@ class MediumTermAnalyzer:
             else:
                 return ("FONDAMENTALI MEDI", score)
                 
-        except:
-            return ("FONDAMENTALI N/D", 0.5)
+        except Exception as e:
+            print(f"      ⚠️  Fundamental error: {str(e)[:50]}")
+            return ("FONDAMENTALI: Dati non disponibili", 0.5)
     
     def analyze_ticker(self, ticker: str) -> Optional[Dict]:
         """Analisi completa di un ticker"""
-        df = self.download_data(ticker)
-        if df is None:
-            print(f"  ⚠️  {ticker}: Dati insufficienti o download fallito")
+        try:
+            df = self.download_data(ticker)
+            if df is None or len(df) < 10:
+                print(f"    ⚠️  {ticker}: Dati insufficienti per analisi")
+                return None
+            
+            # Analisi tutti gli indicatori
+            indicators = {
+                'ichimoku': self.analyze_ichimoku(df),
+                'moving_averages': self.analyze_moving_averages(df),
+                'momentum': self.analyze_momentum(df),
+                'volume': self.analyze_volume(df),
+                'fibonacci': self.analyze_fibonacci(df),
+                'fundamental': self.analyze_fundamental(ticker)
+            }
+            
+            # Calcola score totale pesato
+            total_score = 0
+            total_weight = 0
+            
+            for name, (desc, score) in indicators.items():
+                weight = self.weights.get(name, 0)
+                total_score += score * weight
+                total_weight += weight
+            
+            final_score = total_score / total_weight if total_weight > 0 else 0.5
+            
+            # Raccomandazione
+            recommendation, rec_type = get_recommendation(final_score, self.thresholds)
+            
+            return {
+                'ticker': ticker,
+                'score': round(final_score, 3),
+                'recommendation': recommendation,
+                'rec_type': rec_type,
+                'indicators': indicators,
+                'data_points': len(df)
+            }
+            
+        except Exception as e:
+            print(f"    ❌ {ticker}: Errore analisi - {str(e)[:100]}")
             return None
-        
-        print(f"  ✅ {ticker}: {len(df)} righe scaricate")
-        
-        # Analisi tutti gli indicatori
-        indicators = {
-            'ichimoku': self.analyze_ichimoku(df),
-            'moving_averages': self.analyze_moving_averages(df),
-            'momentum': self.analyze_momentum(df),
-            'volume': self.analyze_volume(df),
-            'fibonacci': self.analyze_fibonacci(df),
-            'fundamental': self.analyze_fundamental(ticker)
-        }
-        
-        # Calcola score totale pesato
-        total_score = 0
-        total_weight = 0
-        
-        for name, (desc, score) in indicators.items():
-            weight = self.weights.get(name, 0)
-            total_score += score * weight
-            total_weight += weight
-        
-        final_score = total_score / total_weight if total_weight > 0 else 0.5
-        
-        # Raccomandazione
-        recommendation, rec_type = get_recommendation(final_score, self.thresholds)
-        
-        return {
-            'ticker': ticker,
-            'score': round(final_score, 3),
-            'recommendation': recommendation,
-            'rec_type': rec_type,
-            'indicators': indicators
-        }
 
 # ============================================================================
-# FUNZIONI DI OUTPUT
+# FUNZIONI DI FORMATTAZIONE REPORT
 # ============================================================================
 
-def format_weekly_analysis(results: List[Dict], group_name: str, descriptions: Dict) -> str:
-    """Formatta analisi per un gruppo"""
+def create_portfolio_report(results: List[Dict], descriptions: Dict) -> str:
+    """Crea report completo per portafoglio"""
     if not results:
-        return f"\n{group_name}\n" + "-" * 40 + "\n📭 Nessun titolo analizzato\n"
+        return "📭 *NESSUN TITOLO NEL PORTAFOGLIO ANALIZZATO*"
     
-    # Ordina dal PEGGIORE al MIGLIORE (score crescente)
+    # Header
+    timestamp = datetime.now().strftime("%d/%m/%Y %H:%M")
+    header = f"📊 *REPORT SETTIMANALE - PORTAFOGLIO*\n"
+    header += f"Data: {timestamp}\n"
+    header += "=" * 40 + "\n"
+    
+    # Statistiche
+    stats = []
+    if results:
+        avg_score = sum(r['score'] for r in results) / len(results)
+        bearish = sum(1 for r in results if r['score'] < 0.4)
+        neutral = sum(1 for r in results if 0.4 <= r['score'] <= 0.6)
+        bullish = sum(1 for r in results if r['score'] > 0.6)
+        
+        stats.append(f"📈 *STATISTICHE PORTAFOGLIO*\n")
+        stats.append(f"• Titoli analizzati: {len(results)}\n")
+        stats.append(f"• Score medio: {avg_score:.3f}\n")
+        stats.append(f"• 🔴 Allerta: {bearish} titoli\n")
+        stats.append(f"• ⚪ Neutri: {neutral} titoli\n")
+        stats.append(f"• 🟢 Opportunità: {bullish} titoli\n")
+    
+    # Analisi titoli (dal PEGGIORE al MIGLIORE)
     sorted_results = sorted(results, key=lambda x: x['score'])
     
-    lines = []
-    lines.append(f"\n{group_name}")
-    lines.append("-" * 40)
+    analysis_lines = []
+    analysis_lines.append(f"\n💰 *ANALISI DETTAGLIATA* (dal peggiore)")
+    analysis_lines.append("-" * 40)
     
     for result in sorted_results:
         ticker = result['ticker']
         score = result['score']
         recommendation = result['recommendation']
-        desc = descriptions.get(ticker, f"{ticker} (descrizione non disponibile)")
+        desc = descriptions.get(ticker, ticker)
         
-        lines.append(f"\n{ticker} - {desc}")
-        lines.append(f"Score: {score:.3f} | {recommendation}")
+        analysis_lines.append(f"\n*{ticker}* - {desc}")
+        analysis_lines.append(f"Score: *{score:.3f}* | {recommendation}")
         
-        # Indicatori dettagliati (opzionale)
+        # Indicatori dettagliati
         for ind_name, (ind_desc, ind_score) in result['indicators'].items():
-            lines.append(f"  • {ind_desc} ({ind_score:.1%})")
+            # Formatta l'emoji in base allo score
+            if ind_score >= 0.7:
+                emoji = "🟢"
+            elif ind_score <= 0.3:
+                emoji = "🔴"
+            else:
+                emoji = "⚪"
+            
+            analysis_lines.append(f"  {emoji} {ind_desc} ({ind_score:.0%})")
     
-    return "\n".join(lines)
+    # Footer
+    footer = "\n" + "=" * 40 + "\n"
+    footer += "*LEGENDA RACCOMANDAZIONI:*\n"
+    footer += "🔴🔴 VENDI SUBITO (score < 0.25)\n"
+    footer += "🔴 CONSIGLIA VENDITA (score 0.25-0.35)\n"
+    footer += "🟡 MONITORA ATTIVAMENTE (score 0.35-0.45)\n"
+    footer += "⚪ MANTIENI POSIZIONE (score 0.45-0.55)\n"
+    footer += "🟢 CONSIGLIA ACQUISTO (score 0.55-0.65)\n"
+    footer += "🟢🟢 FORTE ACQUISTO (score > 0.65)\n"
+    footer += "\n_Periodo dati: 1 anno | Intervallo: settimanale_"
+    
+    # Combina tutto
+    message = header + "\n".join(stats) + "\n".join(analysis_lines) + footer
+    
+    return message
 
-def send_telegram_report(token: str, chat_id: str, message: str):
-    """Invia report settimanale"""
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        
-        # Telegram ha limite di 4096 caratteri per messaggio
-        MAX_LENGTH = 4096
-        
-        # Dividi il messaggio in parti più piccole
-        def split_message(msg: str, max_len: int = MAX_LENGTH) -> List[str]:
-            """Divide intelligentemente il messaggio"""
-            if len(msg) <= max_len:
-                return [msg]
-            
-            parts = []
-            lines = msg.split('\n')
-            current_part = []
-            current_length = 0
-            
-            for line in lines:
-                line_length = len(line) + 1  # +1 per il newline
-                
-                if current_length + line_length > max_len:
-                    # Se la parte corrente ha contenuto, salvala
-                    if current_part:
-                        parts.append('\n'.join(current_part))
-                    
-                    # Se anche la singola linea è troppo lunga, dividila
-                    if line_length > max_len:
-                        # Dividi la linea lunga
-                        for i in range(0, len(line), max_len - 100):
-                            parts.append(line[i:i + max_len - 100])
-                        current_part = []
-                        current_length = 0
-                    else:
-                        current_part = [line]
-                        current_length = line_length
-                else:
-                    current_part.append(line)
-                    current_length += line_length
-            
-            # Aggiungi l'ultima parte
-            if current_part:
-                parts.append('\n'.join(current_part))
-            
-            return parts
-        
-        # Dividi il messaggio
-        parts = split_message(message)
-        
-        print(f"📤 Invio {len(parts)} parti a Telegram...")
-        
-        # Invia tutte le parti
-        for i, part in enumerate(parts):
-            print(f"  Parte {i+1}/{len(parts)}: {len(part)} caratteri")
-            
-            payload = {
-                "chat_id": chat_id,
-                "text": part,
-                "parse_mode": "Markdown" if i == 0 else None,  # Solo la prima parte ha markdown
-                "disable_web_page_preview": True
-            }
-            
-            try:
-                resp = requests.post(url, json=payload, timeout=30)
-                if resp.status_code == 200:
-                    print(f"    ✅ Parte {i+1} inviata")
-                else:
-                    print(f"    ❌ Parte {i+1}: errore {resp.status_code}")
-                    print(f"    Response: {resp.text[:200]}")
-            except Exception as e:
-                print(f"    ❌ Errore invio parte {i+1}: {e}")
-            
-            # Piccola pausa tra i messaggi per evitare rate limiting
-            if i < len(parts) - 1:
-                import time
-                time.sleep(1)
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Errore invio Telegram: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
-def main():
-    print("📊 ANALISI SETTIMANALE MEDIO-TERMINE")
-    print(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
-    print("=" * 60)
+def create_watchlist_report(results: List[Dict], descriptions: Dict) -> str:
+    """Crea report completo per watchlist"""
+    if not results:
+        return "👁️  *NESSUN TITOLO IN WATCHLIST ANALIZZATO*"
     
-    # Carica titoli da CSV
-    portfolio, watchlist, descriptions = load_titoli_csv()
-    
-    print(f"💰 Portafoglio: {len(portfolio)} titoli")
-    print(f"👁️  Watchlist: {len(watchlist)} titoli")
-    
-    # Analisi
-    analyzer = MediumTermAnalyzer()
-    
-    portfolio_results = []
-    watchlist_results = []
-    
-    # Analizza portafoglio
-    print("\n🔍 Analisi portafoglio...")
-    for ticker in portfolio:
-        print(f"  {ticker}...", end="", flush=True)
-        result = analyzer.analyze_ticker(ticker)
-        if result:
-            portfolio_results.append(result)
-            print(f" ✓ (Score: {result['score']:.3f})")
-        else:
-            print(f" ✗ (Dati insufficienti)")
-    
-    # Analizza watchlist
-    print("\n🔍 Analisi watchlist...")
-    for ticker in watchlist:
-        print(f"  {ticker}...", end="", flush=True)
-        result = analyzer.analyze_ticker(ticker)
-        if result:
-            watchlist_results.append(result)
-            print(f" ✓ (Score: {result['score']:.3f})")
-        else:
-            print(f" ✗ (Dati insufficienti)")
-    
-    # Prepara report
-    header = f"📈 *REPORT SETTIMANALE - {datetime.now().strftime('%d/%m/%Y')}*\n"
-    header += "Analisi Medio-Termine (3-12 mesi)\n"
-    header += f"Periodo dati: {WEEKLY_PERIOD} | Intervallo: {WEEKLY_INTERVAL}\n"
+    # Header
+    timestamp = datetime.now().strftime("%d/%m/%Y %H:%M")
+    header = f"📊 *REPORT SETTIMANALE - WATCHLIST*\n"
+    header += f"Data: {timestamp}\n"
+    header += "=" * 40 + "\n"
     
     # Statistiche
     stats = []
-    if portfolio_results:
-        avg_score = sum(r['score'] for r in portfolio_results) / len(portfolio_results)
-        bearish = sum(1 for r in portfolio_results if r['score'] < 0.4)
-        stats.append(f"📊 Portafoglio: Score medio {avg_score:.3f} | Allerta: {bearish}/{len(portfolio_results)}")
+    if results:
+        avg_score = sum(r['score'] for r in results) / len(results)
+        bearish = sum(1 for r in results if r['score'] < 0.4)
+        neutral = sum(1 for r in results if 0.4 <= r['score'] <= 0.6)
+        bullish = sum(1 for r in results if r['score'] > 0.6)
+        
+        stats.append(f"📈 *STATISTICHE WATCHLIST*\n")
+        stats.append(f"• Titoli monitorati: {len(results)}\n")
+        stats.append(f"• Score medio: {avg_score:.3f}\n")
+        stats.append(f"• 🔴 Attenzione: {bearish} titoli\n")
+        stats.append(f"• ⚪ Neutri: {neutral} titoli\n")
+        stats.append(f"• 🟢 Opportunità: {bullish} titoli\n")
     
-    if watchlist_results:
-        avg_score = sum(r['score'] for r in watchlist_results) / len(watchlist_results)
-        bullish = sum(1 for r in watchlist_results if r['score'] > 0.6)
-        stats.append(f"📊 Watchlist: Score medio {avg_score:.3f} | Opportunità: {bullish}/{len(watchlist_results)}")
+    # Analisi titoli (dal PEGGIORE al MIGLIORE)
+    sorted_results = sorted(results, key=lambda x: x['score'])
     
-    # Costruisci messaggio
-    message = header + "\n" + "\n".join(stats) + "\n"
+    analysis_lines = []
+    analysis_lines.append(f"\n👁️  *ANALISI DETTAGLIATA* (dal peggiore)")
+    analysis_lines.append("-" * 40)
     
-    # Aggiungi analisi portafoglio (PEGGIORI prima)
-    message += format_weekly_analysis(portfolio_results, "💰 PORTAFOGLIO ATTIVO (dal peggiore)", descriptions)
-    
-    # Aggiungi analisi watchlist (PEGGIORI prima)
-    message += format_weekly_analysis(watchlist_results, "\n👁️  WATCHLIST (dal peggiore)", descriptions)
+    for result in sorted_results:
+        ticker = result['ticker']
+        score = result['score']
+        recommendation = result['recommendation']
+        desc = descriptions.get(ticker, ticker)
+        
+        analysis_lines.append(f"\n*{ticker}* - {desc}")
+        analysis_lines.append(f"Score: *{score:.3f}* | {recommendation}")
+        
+        # Solo indicatori chiave per watchlist (3 principali)
+        indicators = result['indicators']
+        key_indicators = [
+            ('ichimoku', 'Trend'),
+            ('moving_averages', 'Medie Mobili'),
+            ('fundamental', 'Fondamentali')
+        ]
+        
+        for ind_name, ind_label in key_indicators:
+            if ind_name in indicators:
+                ind_desc, ind_score = indicators[ind_name]
+                # Formatta l'emoji in base allo score
+                if ind_score >= 0.7:
+                    emoji = "🟢"
+                elif ind_score <= 0.3:
+                    emoji = "🔴"
+                else:
+                    emoji = "⚪"
+                
+                analysis_lines.append(f"  {emoji} {ind_desc.split(' ')[0]} ({ind_score:.0%})")
     
     # Footer
-    message += "\n\n" + "=" * 40
-    message += "\n📋 LEGENDA RACCOMANDAZIONI:\n"
-    message += "🔴🔴 VENDI SUBITO (score < 0.25)\n"
-    message += "🔴 CONSIGLIA VENDITA (score 0.25-0.35)\n"
-    message += "🟡 MONITORA ATTIVAMENTE (score 0.35-0.45)\n"
-    message += "⚪ MANTIENI POSIZIONE (score 0.45-0.55)\n"
-    message += "🟢 CONSIGLIA ACQUISTO (score 0.55-0.65)\n"
-    message += "🟢🟢 FORTE ACQUISTO (score > 0.65)\n"
+    footer = "\n" + "=" * 40 + "\n"
+    footer += "*SCORE INTERPRETATION:*\n"
+    footer += "🟢 > 0.65: Forte opportunità\n"
+    footer += "🟢 0.55-0.65: Opportunità\n"
+    footer += "⚪ 0.45-0.55: Neutrale\n"
+    footer += "🟡 0.35-0.45: Monitorare\n"
+    footer += "🔴 < 0.35: Attenzione\n"
+    footer += "\n_Titoli da monitorare per possibili ingressi_"
     
-    # Invia
-    # Telegram
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    # Combina tutto
+    message = header + "\n".join(stats) + "\n".join(analysis_lines) + footer
     
-    if token and chat_id:
-        print("\n📤 Invio report a Telegram...")
-        
-        # 1. Prepara e invia PORTAFOGLIO
-        if portfolio_results:
-            port_header = f"📈 *REPORT PORTAFOGLIO - {datetime.now().strftime('%d/%m/%Y')}*\n"
-            port_message = port_header + format_weekly_analysis(portfolio_results, "💰 PORTAFOGLIO ATTIVO", descriptions)
-            print(f"📤 Invio portafoglio ({len(port_message)} caratteri)...")
-            send_telegram_message(token, chat_id, port_message, use_markdown=True)
-        
-        # Pausa di 3 secondi tra i messaggi
-        import time
-        time.sleep(3)
-        
-        # 2. Prepara e invia WATCHLIST
-        if watchlist_results:
-            watch_header = f"📈 *REPORT WATCHLIST - {datetime.now().strftime('%d/%m/%Y')}*\n"
-            watch_message = watch_header + format_weekly_analysis(watchlist_results, "👁️  WATCHLIST", descriptions)
-            print(f"📤 Invio watchlist ({len(watch_message)} caratteri)...")
-            send_telegram_message(token, chat_id, watch_message, use_markdown=True)
-        else:
-            print("❌ Errore nell'invio")
-    else:
-        print("\nℹ️  Credenziali Telegram mancanti")
-        print(message)
-    
-    print(f"\n🏁 Analisi completata alle {datetime.now().strftime('%H:%M:%S')}")
+    return message
 
-if __name__ == "__main__":
+# ============================================================================
+# FUNZIONI DI INVIO TELEGRAM
+# ============================================================================
+
+def send_telegram_message_safe(token: str, chat_id: str, message: str, 
+                               message_type: str = "Report") -> bool:
+    """
+    Invia un messaggio a Telegram con gestione errori robusta
+    """
     try:
-        main()
-    except KeyboardInterrupt:
-        print("\n⏹️  Interrotto dall'utente")
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        
+        # Limite Telegram
+        MAX_LENGTH = 4096
+        
+        print(f"  📤 Preparazione {message_type}...")
+        print(f"    Lunghezza: {len(message)} caratteri")
+        
+        # Se il messaggio è troppo lungo, dividilo
+        if len(message) > MAX_LENGTH:
+            print(f"    ⚠️  Messaggio troppo lungo, divido in parti...")
+            
+            # Strategia di divisione intelligente
+            parts = []
+            sections = message.split('\n💰 *ANALISI DETTAGLIATA*')
+            
+            if len(sections) > 1:
+                # Parte 1: Header + Statistiche
+                part1 = sections[0]
+                if len(part1) <= MAX_LENGTH:
+                    parts.append(part1)
+                else:
+                    # Dividi ulteriormente
+                    lines1 = part1.split('\n')
+                    current_part = []
+                    current_len = 0
+                    
+                    for line in lines1:
+                        if current_len + len(line) + 1 > MAX_LENGTH:
+                            parts.append('\n'.join(current_part))
+                            current_part = [line]
+                            current_len = len(line)
+                        else:
+                            current_part.append(line)
+                            current_len += len(line) + 1
+                    
+                    if current_part:
+                        parts.append('\n'.join(current_part))
+                
+                # Parte 2: Analisi dettagliata
+                part2 = '💰 *ANALISI DETTAGLIATA*' + sections[1]
+                parts.append(part2)
+            else:
+                # Divisione semplice per righe
+                lines = message.split('\n')
+                current_part = []
+                current_length = 0
+                
+                for line in lines:
+                    if current_length + len(line) + 1 > MAX_LENGTH:
+                        parts.append('\n'.join(current_part))
+                        current_part = [line]
+                        current_length = len(line)
+                    else:
+                        current_part.append(line)
+                        current_length += len(line) + 1
+                
+                if current_part:
+                    parts.append('\n'.join(current_part))
+            
+            print(f"    Diviso in {len(parts)} parti")
+        else:
+            parts = [message]
+        
+        # Invia tutte le parti
+        success_count = 0
+        for i, part in enumerate(parts):
+            try:
+                payload = {
+                    "chat_id": chat_id,
+                    "text": part,
+                    "parse_mode": "Markdown" if i == 0 else None,
+                    "disable_web_page_preview": True,
+                    "disable_notification": (i > 0)  # Solo prima parte fa notifica
+                }
+                
+                response = requests.post(url, json=payload, timeout=30)
+                
+                if response.status_code == 200:
+                    success_count += 1
+                    print(f"    ✅ Parte {i+1}/{len(parts)} inviata")
+                else:
+                    print(f"    ❌ Parte {i+1}: Errore {response.status_code}")
+                    print(f"      Response: {response.text[:200]}")
+                
+                # Pausa tra le parti
+                if i < len(parts) - 1:
+                    time.sleep(1)
+                    
+            except requests.exceptions.Timeout:
+                print(f"    ⏱️  Timeout parte {i+1}")
+            except Exception as e:
+                print(f"    ❌ Errore parte {i+1}: {str(e)[:100]}")
+        
+        return success_count == len(parts)
+        
     except Exception as e:
-        print(f"\n❌ Errore: {e}")
+        print(f"❌ Errore critico invio {message_type}: {e}")
+        return False
+
+# ============================================================================
+# FUNZIONE PRINCIPALE
+# ============================================================================
+
+def main():
+    """Funzione principale con gestione errori completa"""
+    start_time = time.time()
+    
+    try:
+        print("=" * 60)
+        print("📊 AGENTE DI TRADING - ANALISI SETTIMANALE")
+        print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        print("=" * 60)
+        
+        # 1. Caricamento configurazione
+        print("\n📁 CARICAMENTO CONFIGURAZIONE")
+        print("-" * 40)
+        
+        portfolio, watchlist, descriptions = load_titoli_csv()
+        print(f"✅ Titoli caricati:")
+        print(f"   • Portafoglio: {len(portfolio)} titoli")
+        print(f"   • Watchlist: {len(watchlist)} titoli")
+        
+        if not portfolio and not watchlist:
+            print("❌ Nessun titolo da analizzare")
+            return
+        
+        # 2. Inizializzazione analizzatore
+        print("\n🔧 INIZIALIZZAZIONE ANALIZZATORE")
+        print("-" * 40)
+        analyzer = MediumTermAnalyzer()
+        
+        # 3. Analisi Portafoglio
+        portfolio_results = []
+        if portfolio:
+            print(f"\n💰 ANALISI PORTAFOGLIO")
+            print("-" * 40)
+            
+            for i, ticker in enumerate(portfolio, 1):
+                print(f"[{i}/{len(portfolio)}] {ticker}...", end="", flush=True)
+                result = analyzer.analyze_ticker(ticker)
+                
+                if result:
+                    portfolio_results.append(result)
+                    print(f" ✅ Score: {result['score']:.3f}")
+                else:
+                    print(f" ❌ Fallita")
+        
+        # 4. Analisi Watchlist
+        watchlist_results = []
+        if watchlist:
+            print(f"\n👁️  ANALISI WATCHLIST")
+            print("-" * 40)
+            
+            for i, ticker in enumerate(watchlist, 1):
+                print(f"[{i}/{len(watchlist)}] {ticker}...", end="", flush=True)
+                result = analyzer.analyze_ticker(ticker)
+                
+                if result:
+                    watchlist_results.append(result)
+                    print(f" ✅ Score: {result['score']:.3f}")
+                else:
+                    print(f" ❌ Fallita")
+        
+        # 5. Verifica risultati
+        print("\n📊 RIEPILOGO RISULTATI")
+        print("-" * 40)
+        print(f"Portafoglio analizzati: {len(portfolio_results)}/{len(portfolio)}")
+        print(f"Watchlist analizzati: {len(watchlist_results)}/{len(watchlist)}")
+        
+        if not portfolio_results and not watchlist_results:
+            print("❌ Nessun risultato valido da inviare")
+            return
+        
+        # 6. Invio Telegram
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        
+        if not token or not chat_id:
+            print("⚠️  Credenziali Telegram non configurate")
+            print("   TELEGRAM_BOT_TOKEN:", "✅" if token else "❌")
+            print("   TELEGRAM_CHAT_ID:", "✅" if chat_id else "❌")
+            return
+        
+        print("\n📤 INVIO REPORT TELEGRAM")
+        print("-" * 40)
+        
+        # INVIO 1: PORTAFOGLIO
+        if portfolio_results:
+            print("\n1️⃣  INVIO PORTAFOGLIO")
+            portfolio_message = create_portfolio_report(portfolio_results, descriptions)
+            
+            success = send_telegram_message_safe(
+                token, chat_id, portfolio_message, "Portafoglio"
+            )
+            
+            if success:
+                print("✅ Report Portafoglio inviato con successo!")
+            else:
+                print("❌ Invio Portafoglio parzialmente fallito")
+            
+            # Pausa tra i due invii
+            time.sleep(3)
+        
+        # INVIO 2: WATCHLIST
+        if watchlist_results:
+            print("\n2️⃣  INVIO WATCHLIST")
+            watchlist_message = create_watchlist_report(watchlist_results, descriptions)
+            
+            success = send_telegram_message_safe(
+                token, chat_id, watchlist_message, "Watchlist"
+            )
+            
+            if success:
+                print("✅ Report Watchlist inviato con successo!")
+            else:
+                print("❌ Invio Watchlist parzialmente fallito")
+        
+        # 7. Statistiche finali
+        elapsed_time = time.time() - start_time
+        print("\n" + "=" * 60)
+        print("🏁 ANALISI COMPLETATA")
+        print("-" * 40)
+        print(f"Tempo impiegato: {elapsed_time:.1f} secondi")
+        print(f"Titoli totali analizzati: {len(portfolio_results) + len(watchlist_results)}")
+        print(f"Data cache: {len(analyzer.data_cache)} ticker")
+        print(f"Ora completamento: {datetime.now().strftime('%H:%M:%S')}")
+        print("=" * 60)
+        
+    except KeyboardInterrupt:
+        print("\n\n⏹️  INTERROTTO DALL'UTENTE")
+        sys.exit(1)
+        
+    except Exception as e:
+        print(f"\n❌ ERRORE CRITICO: {e}")
         import traceback
         traceback.print_exc()
+        sys.exit(1)
+
+# ============================================================================
+# ESECUZIONE
+# ============================================================================
+
+if __name__ == "__main__":
+    main()
