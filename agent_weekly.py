@@ -399,41 +399,85 @@ def send_telegram_report(token: str, chat_id: str, message: str):
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         
-        # Se messaggio troppo lungo, dividi
-        max_length = 4000
-        if len(message) <= max_length:
-            parts = [message]
-        else:
+        # Telegram ha limite di 4096 caratteri per messaggio
+        MAX_LENGTH = 4096
+        
+        # Dividi il messaggio in parti più piccole
+        def split_message(msg: str, max_len: int = MAX_LENGTH) -> List[str]:
+            """Divide intelligentemente il messaggio"""
+            if len(msg) <= max_len:
+                return [msg]
+            
             parts = []
-            lines = message.split('\n')
+            lines = msg.split('\n')
             current_part = []
             current_length = 0
             
             for line in lines:
-                if current_length + len(line) + 1 > max_length:
-                    parts.append('\n'.join(current_part))
-                    current_part = [line]
-                    current_length = len(line)
+                line_length = len(line) + 1  # +1 per il newline
+                
+                if current_length + line_length > max_len:
+                    # Se la parte corrente ha contenuto, salvala
+                    if current_part:
+                        parts.append('\n'.join(current_part))
+                    
+                    # Se anche la singola linea è troppo lunga, dividila
+                    if line_length > max_len:
+                        # Dividi la linea lunga
+                        for i in range(0, len(line), max_len - 100):
+                            parts.append(line[i:i + max_len - 100])
+                        current_part = []
+                        current_length = 0
+                    else:
+                        current_part = [line]
+                        current_length = line_length
                 else:
                     current_part.append(line)
-                    current_length += len(line) + 1
+                    current_length += line_length
             
+            # Aggiungi l'ultima parte
             if current_part:
                 parts.append('\n'.join(current_part))
+            
+            return parts
+        
+        # Dividi il messaggio
+        parts = split_message(message)
+        
+        print(f"📤 Invio {len(parts)} parti a Telegram...")
         
         # Invia tutte le parti
         for i, part in enumerate(parts):
+            print(f"  Parte {i+1}/{len(parts)}: {len(part)} caratteri")
+            
             payload = {
                 "chat_id": chat_id,
                 "text": part,
-                "parse_mode": "Markdown" if i == 0 else None,
+                "parse_mode": "Markdown" if i == 0 else None,  # Solo la prima parte ha markdown
                 "disable_web_page_preview": True
             }
-            requests.post(url, json=payload, timeout=15)
             
+            try:
+                resp = requests.post(url, json=payload, timeout=30)
+                if resp.status_code == 200:
+                    print(f"    ✅ Parte {i+1} inviata")
+                else:
+                    print(f"    ❌ Parte {i+1}: errore {resp.status_code}")
+                    print(f"    Response: {resp.text[:200]}")
+            except Exception as e:
+                print(f"    ❌ Errore invio parte {i+1}: {e}")
+            
+            # Piccola pausa tra i messaggi per evitare rate limiting
+            if i < len(parts) - 1:
+                import time
+                time.sleep(1)
+        
         return True
+        
     except Exception as e:
         print(f"❌ Errore invio Telegram: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # ============================================================================
