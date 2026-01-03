@@ -359,7 +359,7 @@ class MediumTermAnalyzer:
 def format_weekly_analysis(results: List[Dict], group_name: str, descriptions: Dict) -> str:
     """Formatta analisi per un gruppo"""
     if not results:
-        return ""
+        return f"\n{group_name}\n" + "-" * 40 + "\n📭 Nessun titolo analizzato\n"  # ← Messaggio esplicito
     
     # Ordina dal PEGGIORE al MIGLIORE (score crescente)
     sorted_results = sorted(results, key=lambda x: x['score'])
@@ -377,7 +377,7 @@ def format_weekly_analysis(results: List[Dict], group_name: str, descriptions: D
         lines.append(f"\n{ticker} - {desc}")
         lines.append(f"Score: {score:.3f} | {recommendation}")
         
-        # Indicatori dettagliati
+        # Indicatori dettagliati (opzionali - puoi commentare se vuoi messaggi più corti)
         for ind_name, (ind_desc, ind_score) in result['indicators'].items():
             lines.append(f"  • {ind_desc} ({ind_score:.1%})")
     
