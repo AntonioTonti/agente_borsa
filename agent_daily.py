@@ -90,6 +90,54 @@ def analyze_daily_ticker(ticker: str) -> List[str]:
         return []
 
 # ============================================================================
+# FUNZIONI DI OUTPUT
+# ============================================================================
+
+def format_daily_message(portfolio: Dict, watchlist: Dict) -> str:
+    """Formatta messaggio giornaliero"""
+    time_str = datetime.now().strftime("%d/%m %H:%M")
+    header = f"📈 *SEGNALI GIORNALIERI {time_str}*\n\n"
+    
+    parts = []
+    
+    if portfolio:
+        parts.append("💰 *PORTAFOGLIO ATTIVO*")
+        for ticker, signals in portfolio.items():
+            desc = TICKER_DESCRIPTIONS.get(ticker, ticker)
+            parts.append(f"• *{ticker}* - {desc}")
+            for signal in signals:
+                parts.append(f"  {signal}")
+        parts.append("")
+    
+    if watchlist:
+        parts.append("👁️  *WATCHLIST*")
+        for ticker, signals in watchlist.items():
+            desc = TICKER_DESCRIPTIONS.get(ticker, ticker)
+            parts.append(f"• *{ticker}* - {desc}")
+            for signal in signals:
+                parts.append(f"  {signal}")
+    
+    if not portfolio and not watchlist:
+        return header + "📭 Nessun segnale rilevato oggi"
+    
+    return header + "\n".join(parts)
+
+def send_telegram(token: str, chat_id: str, message: str):
+    """Invia a Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True
+        }
+        resp = requests.post(url, json=payload, timeout=10)
+        print(f"📤 Telegram: {resp.status_code}")
+    except Exception as e:
+        print(f"❌ Errore Telegram: {e}")
+
+# ============================================================================
 # FUNZIONE PRINCIPALE
 # ============================================================================
 
@@ -100,7 +148,7 @@ def main():
     portfolio = load_tickers("portfolio.txt")
     watchlist = load_tickers("watchlist.txt")
     
-    print(f"📁 Portafoglio: {len(portfolio)} titoli")
+    print(f"💰 Portafoglio: {len(portfolio)} titoli")
     print(f"👁️  Watchlist: {len(watchlist)} titoli")
     
     # Telegram
@@ -137,50 +185,6 @@ def main():
         print("📭 Nessun segnale oggi")
     
     print("✅ Analisi giornaliera completata")
-
-def format_daily_message(portfolio: Dict, watchlist: Dict) -> str:
-    """Formatta messaggio giornaliero"""
-    time_str = datetime.now().strftime("%d/%m %H:%M")
-    header = f"📈 *SEGNALI GIORNALIERI {time_str}*\n\n"
-    
-    parts = []
-    
-    if portfolio:
-        parts.append("🔴 *PORTAFOGLIO ATTIVO*")
-        for ticker, signals in portfolio.items():
-            desc = TICKER_DESCRIPTIONS.get(ticker, ticker)
-            parts.append(f"• *{ticker}* - {desc}")
-            for signal in signals:
-                parts.append(f"  {signal}")
-        parts.append("")
-    
-    if watchlist:
-        parts.append("🟢 *WATCHLIST*")
-        for ticker, signals in watchlist.items():
-            desc = TICKER_DESCRIPTIONS.get(ticker, ticker)
-            parts.append(f"• *{ticker}* - {desc}")
-            for signal in signals:
-                parts.append(f"  {signal}")
-    
-    if not portfolio and not watchlist:
-        return header + "📭 Nessun segnale rilevato oggi"
-    
-    return header + "\n".join(parts)
-
-def send_telegram(token: str, chat_id: str, message: str):
-    """Invia a Telegram"""
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": message,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True
-        }
-        resp = requests.post(url, json=payload, timeout=10)
-        print(f"📤 Telegram: {resp.status_code}")
-    except Exception as e:
-        print(f"❌ Errore Telegram: {e}")
 
 if __name__ == "__main__":
     try:
