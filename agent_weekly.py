@@ -43,23 +43,31 @@ class MediumTermAnalyzer:
         }
     
     def download_data(self, ticker: str) -> Optional[pd.DataFrame]:
-        """Scarica dati settimanali"""
-        try:
-            df = yf.download(ticker, period=WEEKLY_PERIOD, 
-                            interval=WEEKLY_INTERVAL, progress=False)
-            
-            if df.empty or len(df) < WEEKLY_MIN_POINTS:
-                return None
-            
-            # Pulizia
-            if isinstance(df.columns, pd.MultiIndex):
-                df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-            
-            return df
-        except:
+    """Scarica dati settimanali"""
+    try:
+        df = yf.download(ticker, period=WEEKLY_PERIOD, 
+                        interval=WEEKLY_INTERVAL, progress=False, timeout=30)
+        
+        if df.empty:
+            print(f"    ⚠️  {ticker}: DataFrame vuoto")
             return None
+        
+        # Controllo più flessibile
+        if len(df) < WEEKLY_MIN_POINTS:
+            print(f"    ⚠️  {ticker}: Solo {len(df)} righe (minimo: {WEEKLY_MIN_POINTS})")
+            # Potresti decidere di ritornare comunque df con un warning
+            # return df  # ← prova questo se il problema persiste
+        
+        # Pulizia
+        if isinstance(df.columns, pd.MultiIndex):
+            df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+        
+        return df
+    except Exception as e:
+        print(f"    ❌ {ticker}: Errore download - {str(e)[:100]}")
+        return None
     
     def analyze_ichimoku(self, df: pd.DataFrame) -> Tuple[str, float]:
         """Analisi Ichimoku Cloud"""
@@ -314,11 +322,13 @@ class MediumTermAnalyzer:
         except:
             return ("FONDAMENTALI N/D", 0.5)
     
-    def analyze_ticker(self, ticker: str) -> Optional[Dict]:
-        """Analisi completa di un ticker"""
-        df = self.download_data(ticker)
-        if df is None:
-            return None
+        def analyze_ticker(self, ticker: str) -> Optional[Dict]:
+             """Analisi completa di un ticker"""
+            df = self.download_data(ticker)
+            if df is None:
+                print(f"  ⚠️  {ticker}: Dati insufficienti o download fallito")
+                return None
+            print(f"  ✅ {ticker}: {len(df)} righe scaricate")
         
         # Analisi tutti gli indicatori
         indicators = {
