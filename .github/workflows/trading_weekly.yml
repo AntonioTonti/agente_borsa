@@ -1,0 +1,29 @@
+name: Weekly Trading Analysis
+
+on:
+  schedule:
+    - cron: '0 18 * * 5'  # Venerdì 18:00 UTC (19:00 IT)
+  workflow_dispatch:
+
+jobs:
+  weekly-analysis:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout codice
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Installa dipendenze
+        run: |
+          pip install yfinance ta numpy pandas requests
+          
+      - name: Esegui analisi settimanale
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python agent_weekly.py
