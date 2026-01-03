@@ -427,11 +427,8 @@ def create_portfolio_report(results: List[Dict], descriptions: Dict) -> str:
     if not results:
         return "📭 *NESSUN TITOLO NEL PORTAFOGLIO ANALIZZATO*"
     
-    # Header
-    timestamp = datetime.now().strftime("%d/%m/%Y %H:%M")
-    header = f"📊 *REPORT SETTIMANALE - PORTAFOGLIO*\n"
-    header += f"Data: {timestamp}\n"
-    header += "=" * 40 + "\n"
+    # Header 
+    header = ""
     
     # Statistiche
     stats = []
@@ -440,7 +437,7 @@ def create_portfolio_report(results: List[Dict], descriptions: Dict) -> str:
     sorted_results = sorted(results, key=lambda x: x['score'])
     
     analysis_lines = []
-    analysis_lines.append(f"\n💰 *PORTAFOGLIO*")
+    analysis_lines.append(f"💰 *PORTAFOGLIO*")
     analysis_lines.append("-" * 40)
     
     for result in sorted_results:
@@ -477,11 +474,8 @@ def create_watchlist_report(results: List[Dict], descriptions: Dict) -> str:
     if not results:
         return "👁️  *NESSUN TITOLO IN WATCHLIST ANALIZZATO*"
     
-    # Header
-    timestamp = datetime.now().strftime("%d/%m/%Y %H:%M")
-    header = f"📊 *REPORT SETTIMANALE - WATCHLIST*\n"
-    header += f"Data: {timestamp}\n"
-    header += "=" * 40 + "\n"
+    # Header 
+    header = ""
     
     # Statistiche
     stats = []
@@ -490,7 +484,7 @@ def create_watchlist_report(results: List[Dict], descriptions: Dict) -> str:
     sorted_results = sorted(results, key=lambda x: x['score'])
     
     analysis_lines = []
-    analysis_lines.append(f"\n👁️  *WATCHLIST*")
+    analysis_lines.append(f"👁️  *WATCHLIST*")
     analysis_lines.append("-" * 40)
     
     for result in sorted_results:
