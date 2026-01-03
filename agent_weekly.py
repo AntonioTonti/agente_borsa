@@ -438,8 +438,8 @@ def main():
     portfolio = load_tickers("portfolio.txt")
     watchlist = load_tickers("watchlist.txt")
     
-    print(f"Portafoglio: {len(portfolio)} titoli")
-    print(f"Watchlist: {len(watchlist)} titoli")
+    print(f"💰 Portafoglio: {len(portfolio)} titoli")
+    print(f"👁️  Watchlist: {len(watchlist)} titoli")
     
     # Analisi
     analyzer = MediumTermAnalyzer()
@@ -490,10 +490,10 @@ def main():
     message = header + "\n" + "\n".join(stats) + "\n"
     
     # Aggiungi analisi portafoglio (PEGGIORI prima)
-    message += format_weekly_analysis(portfolio_results, "PORTAFOGLIO ATTIVO (dal peggiore)")
+    message += format_weekly_analysis(portfolio_results, "💰 PORTAFOGLIO ATTIVO (dal peggiore)")
     
     # Aggiungi analisi watchlist (PEGGIORI prima)
-    message += format_weekly_analysis(watchlist_results, "\nWATCHLIST (dal peggiore)")
+    message += format_weekly_analysis(watchlist_results, "\n👁️  WATCHLIST (dal peggiore)")
     
     # Footer
     message += "\n\n" + "=" * 40
