@@ -372,7 +372,7 @@ def format_weekly_analysis(results: List[Dict], group_name: str) -> str:
         ticker = result['ticker']
         score = result['score']
         recommendation = result['recommendation']
-        desc = TICKER_DESCRIPTIONS.get(ticker, ticker)
+        desc = TICKER_DESCRIPTIONS.get(ticker, f"{ticker} (descrizione non disponibile)")
         
         lines.append(f"\n{ticker} - {desc}")
         lines.append(f"Score: {score:.3f} | {recommendation}")
