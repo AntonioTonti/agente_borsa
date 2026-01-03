@@ -10,14 +10,12 @@ from datetime import datetime
 import requests
 import yfinance as yf
 import pandas as pd
-import numpy as np
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 # Configurazione
 sys.path.append('.')
 from config import (
-    load_tickers, TICKER_DESCRIPTIONS,
-    DAILY_PERIOD, DAILY_INTERVAL, DAILY_MIN_POINTS
+    load_titoli_csv, DAILY_PERIOD, DAILY_INTERVAL, DAILY_MIN_POINTS
 )
 
 # ============================================================================
