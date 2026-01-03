@@ -18,7 +18,7 @@ warnings.filterwarnings('ignore')
 # Configurazione
 sys.path.append('.')
 from config import (
-    load_tickers, TICKER_DESCRIPTIONS, load_config, get_recommendation,
+    load_titoli_csv, load_config, get_recommendation,
     WEEKLY_PERIOD, WEEKLY_INTERVAL, WEEKLY_MIN_POINTS
 )
 
@@ -27,7 +27,7 @@ from config import (
 # ============================================================================
 
 class MediumTermAnalyzer:
-    """Analizzatore completo per medio termine (3-12 mesi)"""
+    """Analizzatore completo per medio termine (3-12 meses)"""
     
     def __init__(self):
         self.thresholds = load_config()
@@ -103,7 +103,7 @@ class MediumTermAnalyzer:
             import ta
             
             # Medie chiave per medio termine
-            ema21 = ta.trend.ema_indicator(close, window=21)  # ~5 mesi
+            ema21 = ta.trend.ema_indicator(close, window=21)  # ~5 meses
             sma50 = ta.trend.sma_indicator(close, window=50)  # ~1 anno
             
             if len(ema21) < 3 or len(sma50) < 3:
@@ -356,7 +356,7 @@ class MediumTermAnalyzer:
 # FUNZIONI DI OUTPUT
 # ============================================================================
 
-def format_weekly_analysis(results: List[Dict], group_name: str) -> str:
+def format_weekly_analysis(results: List[Dict], group_name: str, descriptions: Dict) -> str:
     """Formatta analisi per un gruppo"""
     if not results:
         return ""
@@ -372,7 +372,7 @@ def format_weekly_analysis(results: List[Dict], group_name: str) -> str:
         ticker = result['ticker']
         score = result['score']
         recommendation = result['recommendation']
-        desc = TICKER_DESCRIPTIONS.get(ticker, f"{ticker} (descrizione non disponibile)")
+        desc = descriptions.get(ticker, f"{ticker} (descrizione non disponibile)")
         
         lines.append(f"\n{ticker} - {desc}")
         lines.append(f"Score: {score:.3f} | {recommendation}")
@@ -434,9 +434,8 @@ def main():
     print(f"Data: {datetime.now().strftime('%d/%m/%Y')}")
     print("=" * 60)
     
-    # Carica ticker
-    portfolio = load_tickers("portfolio.txt")
-    watchlist = load_tickers("watchlist.txt")
+    # Carica titoli da CSV
+    portfolio, watchlist, descriptions = load_titoli_csv()
     
     print(f"💰 Portafoglio: {len(portfolio)} titoli")
     print(f"👁️  Watchlist: {len(watchlist)} titoli")
@@ -490,10 +489,10 @@ def main():
     message = header + "\n" + "\n".join(stats) + "\n"
     
     # Aggiungi analisi portafoglio (PEGGIORI prima)
-    message += format_weekly_analysis(portfolio_results, "💰 PORTAFOGLIO ATTIVO (dal peggiore)")
+    message += format_weekly_analysis(portfolio_results, "💰 PORTAFOGLIO ATTIVO (dal peggiore)", descriptions)
     
     # Aggiungi analisi watchlist (PEGGIORI prima)
-    message += format_weekly_analysis(watchlist_results, "\n👁️  WATCHLIST (dal peggiore)")
+    message += format_weekly_analysis(watchlist_results, "\n👁️  WATCHLIST (dal peggiore)", descriptions)
     
     # Footer
     message += "\n\n" + "=" * 40
