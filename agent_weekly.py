@@ -435,24 +435,12 @@ def create_portfolio_report(results: List[Dict], descriptions: Dict) -> str:
     
     # Statistiche
     stats = []
-    if results:
-        avg_score = sum(r['score'] for r in results) / len(results)
-        bearish = sum(1 for r in results if r['score'] < 0.4)
-        neutral = sum(1 for r in results if 0.4 <= r['score'] <= 0.6)
-        bullish = sum(1 for r in results if r['score'] > 0.6)
-        
-        stats.append(f"📈 *STATISTICHE PORTAFOGLIO*\n")
-        stats.append(f"• Titoli analizzati: {len(results)}\n")
-        stats.append(f"• Score medio: {avg_score:.3f}\n")
-        stats.append(f"• 🔴 Allerta: {bearish} titoli\n")
-        stats.append(f"• ⚪ Neutri: {neutral} titoli\n")
-        stats.append(f"• 🟢 Opportunità: {bullish} titoli\n")
     
     # Analisi titoli (dal PEGGIORE al MIGLIORE)
     sorted_results = sorted(results, key=lambda x: x['score'])
     
     analysis_lines = []
-    analysis_lines.append(f"\n💰 *ANALISI DETTAGLIATA* (dal peggiore)")
+    analysis_lines.append(f"\n💰 *PORTAFOGLIO*")
     analysis_lines.append("-" * 40)
     
     for result in sorted_results:
@@ -476,16 +464,8 @@ def create_portfolio_report(results: List[Dict], descriptions: Dict) -> str:
             
             analysis_lines.append(f"  {emoji} {ind_desc} ({ind_score:.0%})")
     
-    # Footer
-    footer = "\n" + "=" * 40 + "\n"
-    footer += "*LEGENDA RACCOMANDAZIONI:*\n"
-    footer += "🔴🔴 VENDI SUBITO (score < 0.25)\n"
-    footer += "🔴 CONSIGLIA VENDITA (score 0.25-0.35)\n"
-    footer += "🟡 MONITORA ATTIVAMENTE (score 0.35-0.45)\n"
-    footer += "⚪ MANTIENI POSIZIONE (score 0.45-0.55)\n"
-    footer += "🟢 CONSIGLIA ACQUISTO (score 0.55-0.65)\n"
-    footer += "🟢🟢 FORTE ACQUISTO (score > 0.65)\n"
-    footer += "\n_Periodo dati: 1 anno | Intervallo: settimanale_"
+    # Footer 
+    footer = ""
     
     # Combina tutto
     message = header + "\n".join(stats) + "\n".join(analysis_lines) + footer
@@ -505,24 +485,12 @@ def create_watchlist_report(results: List[Dict], descriptions: Dict) -> str:
     
     # Statistiche
     stats = []
-    if results:
-        avg_score = sum(r['score'] for r in results) / len(results)
-        bearish = sum(1 for r in results if r['score'] < 0.4)
-        neutral = sum(1 for r in results if 0.4 <= r['score'] <= 0.6)
-        bullish = sum(1 for r in results if r['score'] > 0.6)
-        
-        stats.append(f"📈 *STATISTICHE WATCHLIST*\n")
-        stats.append(f"• Titoli monitorati: {len(results)}\n")
-        stats.append(f"• Score medio: {avg_score:.3f}\n")
-        stats.append(f"• 🔴 Attenzione: {bearish} titoli\n")
-        stats.append(f"• ⚪ Neutri: {neutral} titoli\n")
-        stats.append(f"• 🟢 Opportunità: {bullish} titoli\n")
     
     # Analisi titoli (dal PEGGIORE al MIGLIORE)
     sorted_results = sorted(results, key=lambda x: x['score'])
     
     analysis_lines = []
-    analysis_lines.append(f"\n👁️  *ANALISI DETTAGLIATA* (dal peggiore)")
+    analysis_lines.append(f"\n👁️  *WATCHLIST*")
     analysis_lines.append("-" * 40)
     
     for result in sorted_results:
@@ -556,14 +524,7 @@ def create_watchlist_report(results: List[Dict], descriptions: Dict) -> str:
                 analysis_lines.append(f"  {emoji} {ind_desc.split(' ')[0]} ({ind_score:.0%})")
     
     # Footer
-    footer = "\n" + "=" * 40 + "\n"
-    footer += "*SCORE INTERPRETATION:*\n"
-    footer += "🟢 > 0.65: Forte opportunità\n"
-    footer += "🟢 0.55-0.65: Opportunità\n"
-    footer += "⚪ 0.45-0.55: Neutrale\n"
-    footer += "🟡 0.35-0.45: Monitorare\n"
-    footer += "🔴 < 0.35: Attenzione\n"
-    footer += "\n_Titoli da monitorare per possibili ingressi_"
+    footer = ""
     
     # Combina tutto
     message = header + "\n".join(stats) + "\n".join(analysis_lines) + footer
