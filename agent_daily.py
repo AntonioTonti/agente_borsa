@@ -91,31 +91,31 @@ def analyze_daily_ticker(ticker: str) -> List[str]:
 # FUNZIONI DI OUTPUT
 # ============================================================================
 
-def format_daily_message(portfolio: Dict, watchlist: Dict) -> str:
+def format_daily_message(portfolio_signals: Dict, watchlist_signals: Dict, descriptions: Dict) -> str:
     """Formatta messaggio giornaliero"""
     time_str = datetime.now().strftime("%d/%m %H:%M")
     header = f"📈 *SEGNALI GIORNALIERI {time_str}*\n\n"
     
     parts = []
     
-    if portfolio:
+    if portfolio_signals:
         parts.append("💰 *PORTAFOGLIO ATTIVO*")
-        for ticker, signals in portfolio.items():
-            desc = TICKER_DESCRIPTIONS.get(ticker, ticker)
+        for ticker, signals in portfolio_signals.items():
+            desc = descriptions.get(ticker, ticker)
             parts.append(f"• *{ticker}* - {desc}")
             for signal in signals:
                 parts.append(f"  {signal}")
         parts.append("")
     
-    if watchlist:
+    if watchlist_signals:
         parts.append("👁️  *WATCHLIST*")
-        for ticker, signals in watchlist.items():
-            desc = TICKER_DESCRIPTIONS.get(ticker, ticker)
+        for ticker, signals in watchlist_signals.items():
+            desc = descriptions.get(ticker, ticker)
             parts.append(f"• *{ticker}* - {desc}")
             for signal in signals:
                 parts.append(f"  {signal}")
     
-    if not portfolio and not watchlist:
+    if not portfolio_signals and not watchlist_signals:
         return header + "📭 Nessun segnale rilevato oggi"
     
     return header + "\n".join(parts)
@@ -142,9 +142,8 @@ def send_telegram(token: str, chat_id: str, message: str):
 def main():
     print(f"📊 ANALISI GIORNALIERA - {datetime.now().strftime('%d/%m %H:%M')}")
     
-    # Carica ticker
-    portfolio = load_tickers("portfolio.txt")
-    watchlist = load_tickers("watchlist.txt")
+    # Carica titoli da CSV
+    portfolio, watchlist, descriptions = load_titoli_csv()
     
     print(f"💰 Portafoglio: {len(portfolio)} titoli")
     print(f"👁️  Watchlist: {len(watchlist)} titoli")
@@ -153,17 +152,14 @@ def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     
-    # Analisi
-    all_results = {}
-    
-    # Analizza portfolio
+    # Analisi portfolio
     portfolio_signals = {}
     for ticker in portfolio:
         signals = analyze_daily_ticker(ticker)
         if signals:
             portfolio_signals[ticker] = signals
     
-    # Analizza watchlist
+    # Analisi watchlist
     watchlist_signals = {}
     for ticker in watchlist:
         signals = analyze_daily_ticker(ticker)
@@ -172,7 +168,7 @@ def main():
     
     # Prepara messaggio
     if portfolio_signals or watchlist_signals:
-        message = format_daily_message(portfolio_signals, watchlist_signals)
+        message = format_daily_message(portfolio_signals, watchlist_signals, descriptions)
         
         if token and chat_id:
             send_telegram(token, chat_id, message)
