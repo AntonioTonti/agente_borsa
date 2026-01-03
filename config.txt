@@ -1,0 +1,9 @@
+# Soglie personalizzate per le raccomandazioni
+# Valori tra 0.0 e 1.0
+
+STRONG_SELL=0.25
+SELL=0.35
+WARNING=0.45
+NEUTRAL=0.55
+BUY=0.65
+STRONG_BUY=0.75
