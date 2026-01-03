@@ -1,0 +1,301 @@
+# 📊 Agente di Borsa - Sistema di Analisi Tecnica
+
+Un sistema automatizzato di analisi tecnica per titoli azionari con invio automatico di report via Telegram.
+
+## 📁 Struttura del Progetto
+
+```
+agente_borsa/
+├── .github/workflows/          # Automazioni GitHub
+│   ├── trading_daily.yml       # Esecuzione giornaliera (14:00, 19:00 IT)
+│   └── trading_weekly.yml      # Esecuzione settimanale (Venerdì 19:00 IT)
+├── titoli.csv                  # Database titoli (Portafoglio + Watchlist)
+├── config.txt                  # Soglie personalizzate raccomandazioni
+├── config.py                   # Configurazione parametri di sistema
+├── agent_daily.py              # Analisi giornaliera (segnale rapido)
+├── agent_weekly.py             # Analisi settimanale (medio termine)
+├── requirements.txt            # Dipendenze Python
+└── README.md                   # Documentazione
+```
+
+## 📊 Indici e Logiche di Analisi
+
+### 🔴 **ANALISI GIORNALIERA** (`agent_daily.py`)
+**Ora di esecuzione:** 13:00 e 18:00 UTC (14:00 e 19:00 IT)
+**Periodo dati:** Ultimi 2 mesi (giornaliero)
+
+#### **1. EMA10 vs MA31** (Peso: 50%)
+- **Segnale FORTE positivo** (+0.25): `📈 EMA10 > MA31 (CROSSOVER UP)`
+- **Segnale FORTE negativo** (-0.25): `📉 MA31 > EMA10 (CROSSOVER DOWN)`
+- **Segnale positivo** (+0.15): `🟢 EMA10 sopra MA31`
+- **Segnale negativo** (-0.15): `🔴 MA31 sopra EMA10`
+
+#### **2. RSI 14 giorni** (Peso: 30%)
+- **Ipercomprato** (-0.15): `⚠️ RSI > 70 (IPERCOMPRATO)`
+- **Ipervenduto** (+0.10): `⚠️ RSI < 30 (IPERVENDUTO)`
+- **Positivo** (+0.05): RSI > 60
+- **Negativo** (-0.05): RSI < 40
+
+#### **3. Volume** (Peso: 20%)
+- **Alto interesse** (+0.10): `📊 Volume +50%` vs media 10 giorni
+- **Scarso interesse** (-0.05): Volume < 50% della media
+
+#### **📈 Sistema di Scoring:**
+- Score finale = (EMA10/MA31 × 0.5) + (RSI × 0.3) + (Volume × 0.2)
+- Range: 0.0 (molto negativo) → 1.0 (molto positivo)
+- **Ordinamento:** Dal PEGGIORE (score basso) al MIGLIORE (score alto)
+
+---
+
+### 📅 **ANALISI SETTIMANALE** (`agent_weekly.py`)
+**Ora di esecuzione:** Venerdì 18:00 UTC (19:00 IT)
+**Periodo dati:** Ultimo anno (settimanale)
+
+#### **1. Ichimoku Cloud** (Peso: 25%)
+Analizza la posizione del prezzo rispetto alla nuvola Ichimoku:
+- **+90%**: `SOPRA CLOUD + TENKAN > KIJUN`
+- **+70%**: `SOPRA CLOUD`
+- **+30%**: `SOTTO CLOUD`
+- **-90%**: `SOTTO CLOUD + TENKAN < KIJUN`
+- **+50%**: `DENTRO CLOUD` (neutrale)
+
+#### **2. Medie Mobili** (Peso: 20%)
+EMA21 (5 mesi) vs SMA50 (1 anno):
+- **Crossover bullish**: EMA21 > SMA50 con crossover recente
+- **Crossover bearish**: SMA50 > EMA21 con crossover recente
+- **Distanza %**: Maggiore distanza = segnale più forte
+
+#### **3. Momentum** (Peso: 20%)
+Combina RSI, MACD e ADX:
+- **RSI settimanale**: Neutrale 40-60, Bullish >60, Bearish <40
+- **MACD**: Positivo se linea MACD > segnale
+- **ADX**: >25 = trend forte (positivo), >40 = trend molto forte
+
+#### **4. Volume** (Peso: 15%)
+Analisi volume vs media 10 settimane:
+- **+80%**: `VOLUME FORTE` (+>2% prezzo)
+- **+60%**: `VOLUME BUONO` (+>0% prezzo)
+- **+30%**: `VOLUME DEBOLE` (-<2% prezzo)
+- **+20%**: `VOLUME MOLTO BASSO`
+
+#### **5. Fibonacci** (Peso: 10%)
+Posizione nel range annuale:
+- **Supporto** (70%): Vicino a 23.6% o 38.2%
+- **Resistenza** (30%): Vicino a 61.8% o 78.6%
+- **Neutrale** (50%): Mezzo range o lontano dai livelli
+
+#### **6. Fondamentali** (Peso: 10%)
+Dati yFinance semplificati:
+- **P/E Ratio**: Ideale 10-20
+- **Dividend Yield**: >2% positivo
+- **Market Cap**: >1 miliardo positivo
+- **Profit Margins**: >10% positivo
+- **Debt/Equity**: <1.0 positivo
+
+#### **📊 Sistema di Scoring Settimanale:**
+```
+Score Finale = 
+  (Ichimoku × 0.25) +
+  (MA × 0.20) +
+  (Momentum × 0.20) +
+  (Volume × 0.15) +
+  (Fibonacci × 0.10) +
+  (Fondamentali × 0.10)
+```
+
+#### **🎯 Soglie Raccomandazioni** (`config.txt`):
+```
+STRONG_SELL=0.25    # 🔴🔴 VENDI SUBITO
+SELL=0.35           # 🔴 CONSIGLIA VENDITA
+WARNING=0.45        # 🟡 MONITORA ATTIVAMENTE
+NEUTRAL=0.55        # ⚪ MANTIENI POSIZIONE
+BUY=0.65            # 🟢 CONSIGLIA ACQUISTO
+STRONG_BUY=0.75     # 🟢🟢 FORTE ACQUISTO
+```
+
+---
+
+## ⚙️ Manutenzione e Personalizzazione
+
+### **1. Aggiungere/Rimuovere Titoli** (`titoli.csv`)
+Modificare il file CSV con il formato:
+```csv
+codice,tipo,descrizione
+STM,PORTFOLIO,STMicroelectronics N.V.
+PRY.MI,WATCHLIST,Prysmian S.p.A.
+```
+
+**Tipo:**
+- `PORTFOLIO`: Titoli posseduti (analisi prioritaria)
+- `WATCHLIST`: Titoli monitorati (opportunità)
+
+### **2. Regolare Soglie Raccomandazioni** (`config.txt`)
+Modificare i valori tra 0.0 e 1.0:
+- Valori più bassi = segnali più bearish
+- Valori più alti = segnali più bullish
+
+**Esempio per strategia conservativa:**
+```txt
+STRONG_SELL=0.30    # Più alto = meno segnali vendita
+STRONG_BUY=0.80     # Più alto = meno segnali acquisto
+```
+
+### **3. Modificare Parametri Analisi** (`config.py`)
+
+**Giornaliero:**
+```python
+DAILY_PERIOD = "2mo"      # Periodo dati: "1mo", "3mo", "6mo", "1y"
+DAILY_INTERVAL = "1d"     # Intervallo: "1d" (giornaliero)
+DAILY_MIN_POINTS = 32     # Minimo punti dati necessari
+```
+
+**Settimanale:**
+```python
+WEEKLY_PERIOD = "1y"      # Periodo dati
+WEEKLY_INTERVAL = "1wk"   # Intervallo: "1wk" (settimanale)
+WEEKLY_MIN_POINTS = 20    # Minimo punti dati (ridotto da 30)
+```
+
+### **4. Cambiare Orari Esecuzione** (`.github/workflows/`)
+
+**Analisi Giornaliera** (`trading_daily.yml`):
+```yaml
+schedule:
+  - cron: '0 13,18 * * 1-5'  # Lun-Ven, 13:00 e 18:00 UTC
+```
+
+**Analisi Settimanale** (`trading_weekly.yml`):
+```yaml
+schedule:
+  - cron: '0 18 * * 5'      # Venerdì 18:00 UTC (19:00 IT)
+```
+
+### **5. Personalizzare Indicatori**
+
+**Giornaliero** (`agent_daily.py` - funzione `analyze_daily_ticker`):
+- Modificare pesi indicatori (linee ~45-55)
+- Aggiungere nuovi indicatori nella funzione
+- Regolare logica segnali specifici
+
+**Settimanale** (`agent_weekly.py` - classe `MediumTermAnalyzer`):
+- Modificare `self.weights` per cambiare importanza indicatori
+- Personalizzare funzioni specifiche (`analyze_ichimoku`, etc.)
+- Aggiungere nuovi indicatori tecnici
+
+### **6. Configurazione Telegram**
+
+**Secrets GitHub:**
+1. `TELEGRAM_BOT_TOKEN`: Token del bot Telegram
+2. `TELEGRAM_CHAT_ID`: ID della chat/utente
+
+**Formato messaggi:**
+- **Due invii separati**: Portafoglio e Watchlist
+- **Markdown supportato**: *grassetto*, `code`
+- **Limite caratteri**: 4096 per messaggio (divisione automatica)
+
+---
+
+## 🚀 Setup e Installazione
+
+### **1. Clonazione Repository**
+```bash
+git clone https://github.com/AntonioTonti/agente_borsa.git
+cd agente_borsa
+```
+
+### **2. Installazione Dipendenze**
+```bash
+pip install -r requirements.txt
+```
+
+### **3. Configurazione Locale (opzionale)**
+```bash
+# Copiare file di esempio
+cp titoli.csv.example titoli.csv
+
+# Modificare configurazione
+nano config.txt
+```
+
+### **4. Test Locale**
+```bash
+# Test analisi giornaliera
+python agent_daily.py
+
+# Test analisi settimanale
+python agent_weekly.py
+```
+
+### **5. Configurazione GitHub Actions**
+1. Andare su GitHub → Repository → Settings → Secrets and variables → Actions
+2. Aggiungere secrets:
+   - `TELEGRAM_BOT_TOKEN`
+   - `TELEGRAM_CHAT_ID`
+
+---
+
+## 🔧 Risoluzione Problemi
+
+### **Problema: "ImportError: cannot import name"**
+**Soluzione:** Verificare che `config.py` non abbia import circolari. Usare la versione corretta fornita.
+
+### **Problema: Dati Yahoo Finance insufficienti**
+**Soluzione:**
+1. Ridurre `WEEKLY_MIN_POINTS` in `config.py`
+2. Verificare simboli ticker corretti in `titoli.csv`
+3. Controllare suffissi mercato (`.MI` per Milano)
+
+### **Problema: Messaggi Telegram troncati**
+**Soluzione:** Il sistema divide automaticamente messaggi >4096 caratteri. Per report più compatti:
+1. Ridurre dettagli indicatori in `agent_weekly.py`
+2. Limitare numero di titoli in `titoli.csv`
+
+### **Problema: Workflow GitHub non esegue**
+**Soluzione:**
+1. Verificare sintassi cron in `.yml`
+2. Controllare secrets Telegram configurati
+3. Abilitare Actions in repository settings
+
+---
+
+## 📈 Logica di Trading Integrata
+
+### **Filosofia del Sistema:**
+1. **Giornaliero**: Segnali rapidi per aggiustamenti immediati
+2. **Settimanale**: Analisi strutturale per decisioni medio termine
+3. **Separazione**: Portafoglio (gestione) vs Watchlist (opportunità)
+4. **Ordinamento**: Dal peggiore al migliore per focalizzare attenzione
+
+### **Best Practices:**
+- **Non modificare** troppi parametri contemporaneamente
+- **Testare** modifiche in locale prima di commit
+- **Monitorare** log GitHub Actions per debugging
+- **Aggiornare** regolarmente `titoli.csv` con portafoglio attuale
+
+---
+
+## 📞 Supporto e Contributi
+
+### **Segnalazione Bug:**
+1. Controllare log GitHub Actions
+2. Fornire dati: ora errore, titoli coinvolti, messaggio errore
+3. Creare issue con screenshot se possibile
+
+### **Richieste Funzionalità:**
+1. Descrivere caso d'uso
+2. Proporre logica implementazione
+3. Fornire esempi se applicabile
+
+---
+
+## 📄 Licenza
+
+Questo progetto è per uso personale. Condivisione e modifiche consentite con attribuzione.
+
+**Autore:** Antonio Tonti  
+**Ultimo aggiornamento:** Gennaio 2026  
+**Versione:** 2.0 (Doppio invio + Ordinamento intelligente)
+
+---
+
+*Nota: Questo sistema è uno strumento di analisi. Non costituisce consulenza finanziaria. Investire comporta rischi.*
