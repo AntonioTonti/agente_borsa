@@ -21,7 +21,7 @@ agente_borsa/
 ## 📊 Indici e Logiche di Analisi
 
 ### 🔴 **ANALISI GIORNALIERA** (`agent_daily.py`)
-**Ora di esecuzione:** 13:00 e 18:00 UTC (14:00 e 19:00 IT)
+**Ora di esecuzione:** 12:00 e 17:00 UTC (13:00 e 18:00 IT)
 **Periodo dati:** Ultimi 2 mesi (giornaliero)
 
 #### **1. EMA10 vs MA31** (Peso: 50%)
