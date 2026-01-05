@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Analisi Giornaliera
-Invio: 13:00 e 18:00 UTC (14:00 e 19:00 IT)
+Invio: 12:00 e 17:00 UTC (13:00 e 18:00 IT)
 FEATURES:
 - Analisi separata per Portafoglio e Watchlist
 - Due invii Telegram distinti
