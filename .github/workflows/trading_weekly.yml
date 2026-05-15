@@ -3,6 +3,7 @@ name: Weekly Trading Analysis
 on:
   schedule:
     - cron: '0 18 * * 5'  # Venerdì 18:00 UTC (19:00 IT)
+    timezone: "Europe/Rome"
   workflow_dispatch:
 
 jobs:
