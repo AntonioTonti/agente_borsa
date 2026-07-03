@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-Agente di Trading - Analisi Giornaliera con Heikin Ashi
+Agente di Trading - Analisi Giornaliera con Heikin Ashi e Pallino
 Invio: 12:00 e 17:00 UTC (13:00 e 18:00 IT)
 FEATURES:
 - Heikin Ashi (peso 0.35) - barra verde/rossa
+- EMA10 vs MA31 (peso 0.30)
+- RSI (peso 0.20)
+- Volume (peso 0.15)
+- Pallino riassuntivo 🟢/⚪/🔴 vicino al ticker
 - Analisi separata per Portafoglio e Watchlist
 - Due invii Telegram distinti
 - Titoli ordinati dal peggiore al migliore
@@ -40,7 +44,6 @@ def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
     ha_open = (df['Open'] + df['Close']) / 2
     
-    # Calcolo Heikin Ashi vero e proprio (con shift)
     ha['HA_Close'] = ha_close
     ha['HA_Open'] = ha_open.copy()
     
@@ -65,6 +68,24 @@ def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
         )
     
     return ha
+
+# ============================================================================
+# FUNZIONE PALLINO RIASSUNTIVO
+# ============================================================================
+
+def get_bullet(score: float) -> str:
+    """
+    Restituisce il pallino in base allo score finale
+    🟢 Verde: score > 0.60 (trend rialzista)
+    ⚪ Bianco: 0.40 <= score <= 0.60 (laterale/neutro)
+    🔴 Rosso: score < 0.40 (trend ribassista)
+    """
+    if score > 0.60:
+        return "🟢"
+    elif score < 0.40:
+        return "🔴"
+    else:
+        return "⚪"
 
 # ============================================================================
 # INDICATORI GIORNALIERI (CON HEIKIN ASHI)
@@ -97,33 +118,29 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float]:
         volume = df['Volume']
         
         # ================================================================
-        # 1. HEIKIN ASHI (PESO 0.35) - NUOVO INDICATORE
+        # 1. HEIKIN ASHI (PESO 0.35)
         # ================================================================
         ha = calculate_heikin_ashi(df)
         
         if len(ha) >= 2:
-            # Ultima barra e penultima
             last_ha_close = float(ha['HA_Close'].iloc[-1])
             prev_ha_close = float(ha['HA_Close'].iloc[-2])
             last_ha_open = float(ha['HA_Open'].iloc[-1])
             
-            # Barra verde: Close > Open
             if last_ha_close > last_ha_open:
                 signals.append("🟢 HEIKIN ASHI: BARRA VERDE (Trend rialzista)")
-                ha_color_score = 0.35  # Peso massimo
+                ha_color_score = 0.35
                 
-                # Check se è un rafforzamento (Close cresce)
                 if last_ha_close > prev_ha_close:
                     signals.append("   ↑ Rafforzamento: Chiusura > Chiusura precedente")
-                    ha_color_score += 0.10  # Bonus
+                    ha_color_score += 0.10
             else:
                 signals.append("🔴 HEIKIN ASHI: BARRA ROSSA (Trend ribassista)")
                 ha_color_score = -0.35
                 
-                # Check se è un indebolimento (Close cala)
                 if last_ha_close < prev_ha_close:
                     signals.append("   ↓ Indebolimento: Chiusura < Chiusura precedente")
-                    ha_color_score -= 0.10  # Penalty
+                    ha_color_score -= 0.10
         
         # ================================================================
         # 2. EMA10 vs MA31 (PESO 0.30)
@@ -186,34 +203,23 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float]:
         # ================================================================
         # COMBINAZIONE FINALE SCORE
         # ================================================================
-        # Applico il peso di Heikin Ashi (35%) al suo score
-        # Il resto 65% viene dagli altri indicatori
-        other_indicators_score = score  # Score già calcolato dagli altri
-        
-        # Bilancio: Heikin Ashi contribuisce per 0.35 al totale finale
-        # Il resto (0.65) viene dagli altri indicatori
-        # Il range di ha_color_score è -0.45 a +0.45 (con bonus/penalty)
-        # Normalizzo ha_color_score da -0.45..+0.45 a 0..1 per poi pesarlo
-        ha_normalized = (ha_color_score + 0.45) / 0.9  # Mappa a 0-1
-        
-        # Score finale pesato
+        other_indicators_score = score
+        ha_normalized = (ha_color_score + 0.45) / 0.9
         final_score = (ha_normalized * 0.35) + (other_indicators_score * 0.65)
-        
-        # Normalizza score tra 0.0 e 1.0
         final_score = max(0.0, min(1.0, final_score))
         
         return signals, round(final_score, 3)
         
     except Exception as e:
         print(f"❌ {ticker}: {e}")
-        return signals, 0.5  # Score neutro in caso di errore
+        return signals, 0.5
 
 # ============================================================================
-# FUNZIONI DI FORMATTAZIONE REPORT (INVARIATE)
+# FUNZIONI DI FORMATTAZIONE REPORT CON PALLINO
 # ============================================================================
 
 def create_portfolio_daily_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report giornaliero per portafoglio"""
+    """Crea report giornaliero per portafoglio con pallino"""
     if not results:
         return "💰 *PORTAFOGLIO* - Nessun segnale oggi"
     
@@ -224,7 +230,9 @@ def create_portfolio_daily_report(results: List[Tuple[str, List[str], float]], d
     
     for ticker, signals, score in sorted_results:
         desc = descriptions.get(ticker, ticker)
-        lines.append(f"\n*{ticker}* - {desc}")
+        bullet = get_bullet(score)
+        
+        lines.append(f"\n{bullet} *{ticker}* - {desc} (score: {score:.3f})")
         
         if signals:
             for signal in signals:
@@ -235,7 +243,7 @@ def create_portfolio_daily_report(results: List[Tuple[str, List[str], float]], d
     return "\n".join(lines)
 
 def create_watchlist_daily_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report giornaliero per watchlist"""
+    """Crea report giornaliero per watchlist con pallino"""
     if not results:
         return "👁️ *WATCHLIST* - Nessun segnale oggi"
     
@@ -246,7 +254,9 @@ def create_watchlist_daily_report(results: List[Tuple[str, List[str], float]], d
     
     for ticker, signals, score in sorted_results:
         desc = descriptions.get(ticker, ticker)
-        lines.append(f"\n*{ticker}* - {desc}")
+        bullet = get_bullet(score)
+        
+        lines.append(f"\n{bullet} *{ticker}* - {desc} (score: {score:.3f})")
         
         if signals:
             for signal in signals:
@@ -257,7 +267,7 @@ def create_watchlist_daily_report(results: List[Tuple[str, List[str], float]], d
     return "\n".join(lines)
 
 # ============================================================================
-# FUNZIONI DI INVIO TELEGRAM (INVARIATE)
+# FUNZIONI DI INVIO TELEGRAM
 # ============================================================================
 
 def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: bool = True) -> bool:
@@ -321,7 +331,7 @@ def main():
     
     try:
         print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA (Heikin Ashi)")
+        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA (Heikin Ashi + Pallino)")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
