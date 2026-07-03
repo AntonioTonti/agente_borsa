@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Agente di Trading - Analisi Giornaliera
+Agente di Trading - Analisi Giornaliera con Heikin Ashi
 Invio: 12:00 e 17:00 UTC (13:00 e 18:00 IT)
 FEATURES:
+- Heikin Ashi (peso 0.35) - barra verde/rossa
 - Analisi separata per Portafoglio e Watchlist
 - Due invii Telegram distinti
 - Titoli ordinati dal peggiore al migliore
@@ -15,6 +16,7 @@ from datetime import datetime
 import requests
 import yfinance as yf
 import pandas as pd
+import numpy as np
 from typing import List, Dict, Tuple
 
 # Configurazione
@@ -24,7 +26,48 @@ from config import (
 )
 
 # ============================================================================
-# INDICATORI GIORNALIERI (RAPIDI) - MODIFICATO PER ORDINAMENTO
+# FUNZIONE HEIKIN ASHI
+# ============================================================================
+
+def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcola le barre Heikin Ashi a partire da un DataFrame OHLCV
+    Restituisce un DataFrame con le colonne HA_Open, HA_High, HA_Low, HA_Close
+    """
+    ha = pd.DataFrame(index=df.index)
+    
+    # Prima barra: Heikin Ashi = normale
+    ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
+    ha_open = (df['Open'] + df['Close']) / 2
+    
+    # Calcolo Heikin Ashi vero e proprio (con shift)
+    ha['HA_Close'] = ha_close
+    ha['HA_Open'] = ha_open.copy()
+    
+    # Open = (Open_prev + Close_prev) / 2
+    for i in range(1, len(df)):
+        ha.loc[df.index[i], 'HA_Open'] = (ha.loc[df.index[i-1], 'HA_Open'] + ha.loc[df.index[i-1], 'HA_Close']) / 2
+    
+    ha['HA_High'] = df[['High', 'Open', 'Close']].max(axis=1)
+    ha['HA_Low'] = df[['Low', 'Open', 'Close']].min(axis=1)
+    
+    # Correzione per High/Low basati su HA
+    for i in range(len(df)):
+        ha.loc[df.index[i], 'HA_High'] = max(
+            df.loc[df.index[i], 'High'],
+            ha.loc[df.index[i], 'HA_Open'],
+            ha.loc[df.index[i], 'HA_Close']
+        )
+        ha.loc[df.index[i], 'HA_Low'] = min(
+            df.loc[df.index[i], 'Low'],
+            ha.loc[df.index[i], 'HA_Open'],
+            ha.loc[df.index[i], 'HA_Close']
+        )
+    
+    return ha
+
+# ============================================================================
+# INDICATORI GIORNALIERI (CON HEIKIN ASHI)
 # ============================================================================
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float]:
@@ -35,6 +78,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float]:
     """
     signals = []
     score = 0.5  # Score base neutro
+    ha_color_score = 0.0  # Contributo Heikin Ashi
     
     try:
         # Download dati
@@ -52,7 +96,38 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float]:
         close = df['Close']
         volume = df['Volume']
         
-        # 1. EMA10 vs MA31 (indicatore principale) - PESO 0.5
+        # ================================================================
+        # 1. HEIKIN ASHI (PESO 0.35) - NUOVO INDICATORE
+        # ================================================================
+        ha = calculate_heikin_ashi(df)
+        
+        if len(ha) >= 2:
+            # Ultima barra e penultima
+            last_ha_close = float(ha['HA_Close'].iloc[-1])
+            prev_ha_close = float(ha['HA_Close'].iloc[-2])
+            last_ha_open = float(ha['HA_Open'].iloc[-1])
+            
+            # Barra verde: Close > Open
+            if last_ha_close > last_ha_open:
+                signals.append("🟢 HEIKIN ASHI: BARRA VERDE (Trend rialzista)")
+                ha_color_score = 0.35  # Peso massimo
+                
+                # Check se è un rafforzamento (Close cresce)
+                if last_ha_close > prev_ha_close:
+                    signals.append("   ↑ Rafforzamento: Chiusura > Chiusura precedente")
+                    ha_color_score += 0.10  # Bonus
+            else:
+                signals.append("🔴 HEIKIN ASHI: BARRA ROSSA (Trend ribassista)")
+                ha_color_score = -0.35
+                
+                # Check se è un indebolimento (Close cala)
+                if last_ha_close < prev_ha_close:
+                    signals.append("   ↓ Indebolimento: Chiusura < Chiusura precedente")
+                    ha_color_score -= 0.10  # Penalty
+        
+        # ================================================================
+        # 2. EMA10 vs MA31 (PESO 0.30)
+        # ================================================================
         if len(close) >= 32:
             import ta
             ema10 = ta.trend.ema_indicator(close, window=10)
@@ -66,55 +141,75 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float]:
                 
                 if ema_now > ma_now and ema_prev <= ma_prev:
                     signals.append("📈 EMA10 > MA31 (CROSSOVER UP)")
-                    score += 0.25  # Forte positivo
+                    score += 0.25
                 elif ma_now > ema_now and ma_prev <= ema_prev:
                     signals.append("📉 MA31 > EMA10 (CROSSOVER DOWN)")
-                    score -= 0.25  # Forte negativo
+                    score -= 0.25
                 elif ema_now > ma_now:
                     signals.append("🟢 EMA10 sopra MA31")
-                    score += 0.15   # Positivo
+                    score += 0.15
                 else:
                     signals.append("🔴 MA31 sopra EMA10")
-                    score -= 0.15   # Negativo
+                    score -= 0.15
         
-        # 2. RSI giornaliero - PESO 0.3
+        # ================================================================
+        # 3. RSI (PESO 0.20)
+        # ================================================================
         if len(close) >= 15:
             import ta
             rsi = ta.momentum.rsi(close, window=14)
             if len(rsi) > 0:
                 rsi_val = float(rsi.iloc[-1])
                 if rsi_val > 70:
-                    signals.append("⚠️  RSI > 70 (IPERCOMPRATO)")
-                    score -= 0.15   # Negativo (ipercomprato)
+                    signals.append("⚠️ RSI > 70 (IPERCOMPRATO)")
+                    score -= 0.15
                 elif rsi_val < 30:
-                    signals.append("⚠️  RSI < 30 (IPERVENDUTO)")
-                    score += 0.10   # Leggermente positivo (potenziale rimbalzo)
+                    signals.append("⚠️ RSI < 30 (IPERVENDUTO)")
+                    score += 0.10
                 elif rsi_val > 60:
-                    score += 0.05   # Leggermente positivo
+                    score += 0.05
                 elif rsi_val < 40:
-                    score -= 0.05   # Leggermente negativo
+                    score -= 0.05
         
-        # 3. Volume vs media - PESO 0.2
+        # ================================================================
+        # 4. Volume (PESO 0.15)
+        # ================================================================
         if len(volume) >= 10:
             avg_volume = float(volume.tail(10).mean())
             current_volume = float(volume.iloc[-1])
             if current_volume > avg_volume * 1.5:
                 signals.append("📊 Volume +50%")
-                score += 0.10   # Positivo (interesse)
+                score += 0.10
             elif current_volume < avg_volume * 0.5:
-                score -= 0.05   # Negativo (scarso interesse)
+                score -= 0.05
+        
+        # ================================================================
+        # COMBINAZIONE FINALE SCORE
+        # ================================================================
+        # Applico il peso di Heikin Ashi (35%) al suo score
+        # Il resto 65% viene dagli altri indicatori
+        other_indicators_score = score  # Score già calcolato dagli altri
+        
+        # Bilancio: Heikin Ashi contribuisce per 0.35 al totale finale
+        # Il resto (0.65) viene dagli altri indicatori
+        # Il range di ha_color_score è -0.45 a +0.45 (con bonus/penalty)
+        # Normalizzo ha_color_score da -0.45..+0.45 a 0..1 per poi pesarlo
+        ha_normalized = (ha_color_score + 0.45) / 0.9  # Mappa a 0-1
+        
+        # Score finale pesato
+        final_score = (ha_normalized * 0.35) + (other_indicators_score * 0.65)
         
         # Normalizza score tra 0.0 e 1.0
-        score = max(0.0, min(1.0, score))
+        final_score = max(0.0, min(1.0, final_score))
         
-        return signals, round(score, 3)
+        return signals, round(final_score, 3)
         
     except Exception as e:
         print(f"❌ {ticker}: {e}")
         return signals, 0.5  # Score neutro in caso di errore
 
 # ============================================================================
-# FUNZIONI DI FORMATTAZIONE REPORT
+# FUNZIONI DI FORMATTAZIONE REPORT (INVARIATE)
 # ============================================================================
 
 def create_portfolio_daily_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
@@ -122,8 +217,7 @@ def create_portfolio_daily_report(results: List[Tuple[str, List[str], float]], d
     if not results:
         return "💰 *PORTAFOGLIO* - Nessun segnale oggi"
     
-    # Ordina dal PEGGIORE (score basso) al MIGLIORE (score alto)
-    sorted_results = sorted(results, key=lambda x: x[2])  # x[2] = score
+    sorted_results = sorted(results, key=lambda x: x[2])
     
     lines = []
     lines.append("💰 *PORTAFOGLIO*")
@@ -143,13 +237,12 @@ def create_portfolio_daily_report(results: List[Tuple[str, List[str], float]], d
 def create_watchlist_daily_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
     """Crea report giornaliero per watchlist"""
     if not results:
-        return "👁️  *WATCHLIST* - Nessun segnale oggi"
+        return "👁️ *WATCHLIST* - Nessun segnale oggi"
     
-    # Ordina dal PEGGIORE (score basso) al MIGLIORE (score alto)
-    sorted_results = sorted(results, key=lambda x: x[2])  # x[2] = score
+    sorted_results = sorted(results, key=lambda x: x[2])
     
     lines = []
-    lines.append("👁️  *WATCHLIST*")
+    lines.append("👁️ *WATCHLIST*")
     
     for ticker, signals, score in sorted_results:
         desc = descriptions.get(ticker, ticker)
@@ -164,7 +257,7 @@ def create_watchlist_daily_report(results: List[Tuple[str, List[str], float]], d
     return "\n".join(lines)
 
 # ============================================================================
-# FUNZIONI DI INVIO TELEGRAM
+# FUNZIONI DI INVIO TELEGRAM (INVARIATE)
 # ============================================================================
 
 def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: bool = True) -> bool:
@@ -172,10 +265,8 @@ def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: 
     try:
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         
-        # Limite Telegram
         MAX_LENGTH = 4096
         
-        # Se messaggio troppo lungo, dividi
         if len(message) > MAX_LENGTH:
             parts = []
             lines = message.split('\n')
@@ -196,14 +287,13 @@ def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: 
         else:
             parts = [message]
         
-        # Invia tutte le parti
         for i, part in enumerate(parts):
             payload = {
                 "chat_id": chat_id,
                 "text": part,
                 "parse_mode": "Markdown" if (use_markdown and i == 0) else None,
                 "disable_web_page_preview": True,
-                "disable_notification": (i > 0)  # Solo prima parte fa notifica
+                "disable_notification": (i > 0)
             }
             
             resp = requests.post(url, json=payload, timeout=15)
@@ -212,7 +302,6 @@ def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: 
                 print(f"    ❌ Errore invio parte {i+1}: {resp.status_code}")
                 return False
             
-            # Pausa tra le parti
             if i < len(parts) - 1:
                 time.sleep(0.5)
         
@@ -232,7 +321,7 @@ def main():
     
     try:
         print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA")
+        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA (Heikin Ashi)")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
@@ -269,7 +358,7 @@ def main():
         # 3. Analisi Watchlist
         watchlist_results = []
         if watchlist:
-            print(f"\n👁️  ANALISI WATCHLIST")
+            print(f"\n👁️ ANALISI WATCHLIST")
             print("-" * 40)
             
             for i, ticker in enumerate(watchlist, 1):
@@ -302,7 +391,7 @@ def main():
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
         
         if not token or not chat_id:
-            print("⚠️  Credenziali Telegram non configurate")
+            print("⚠️ Credenziali Telegram non configurate")
             print("   TELEGRAM_BOT_TOKEN:", "✅" if token else "❌")
             print("   TELEGRAM_CHAT_ID:", "✅" if chat_id else "❌")
             return
@@ -312,7 +401,7 @@ def main():
         
         # INVIO 1: PORTAFOGLIO
         if portfolio_results:
-            print("\n1️⃣  INVIO PORTAFOGLIO")
+            print("\n1️⃣ INVIO PORTAFOGLIO")
             portfolio_message = create_portfolio_daily_report(portfolio_results, descriptions)
             print(f"   Lunghezza: {len(portfolio_message)} caratteri")
             
@@ -323,12 +412,11 @@ def main():
             else:
                 print("❌ Errore nell'invio portafoglio")
             
-            # Pausa tra i due invii
             time.sleep(2)
         
         # INVIO 2: WATCHLIST
         if watchlist_results:
-            print("\n2️⃣  INVIO WATCHLIST")
+            print("\n2️⃣ INVIO WATCHLIST")
             watchlist_message = create_watchlist_daily_report(watchlist_results, descriptions)
             print(f"   Lunghezza: {len(watchlist_message)} caratteri")
             
@@ -349,7 +437,7 @@ def main():
         print("=" * 60)
         
     except KeyboardInterrupt:
-        print("\n\n⏹️  INTERROTTO DALL'UTENTE")
+        print("\n\n⏹️ INTERROTTO DALL'UTENTE")
         sys.exit(1)
         
     except Exception as e:
