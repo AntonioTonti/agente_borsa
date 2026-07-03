@@ -3,8 +3,9 @@
 Agente di Trading - Analisi Settimanale (STESSA LOGICA DEL GIORNALIERO)
 Invio: Venerdì 18:00 UTC (19:00 IT)
 FEATURES:
-- STESSA ANALISI del giornaliero (EMA, RSI, Volume, Heikin Ashi)
-- MAI su Dati SETTIMANALI invece che giornalieri
+- STESSA ANALISI del giornaliero (Heikin Ashi, EMA, RSI, Volume)
+- MA su Dati SETTIMANALI invece che giornalieri
+- Pallino riassuntivo 🟢/⚪/🔴 vicino al ticker
 - Analisi separata per Portafoglio e Watchlist
 - Due invii Telegram distinti
 """
@@ -25,8 +26,7 @@ from config import (
     load_titoli_csv, DAILY_PERIOD, DAILY_INTERVAL, DAILY_MIN_POINTS
 )
 
-# NOTA: Uso le stesse costanti del giornaliero ma con period="1y" e interval="1wk"
-# Per semplicità, definisco qui le costanti settimanali
+# Costanti settimanali
 WEEKLY_PERIOD = "1y"      # 1 anno di dati
 WEEKLY_INTERVAL = "1wk"   # Barre settimanali
 WEEKLY_MIN_POINTS = 20    # Minimo 20 settimane per l'analisi
@@ -42,21 +42,18 @@ def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     """
     ha = pd.DataFrame(index=df.index)
     
-    # Prima barra: Heikin Ashi = normale
     ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
     ha_open = (df['Open'] + df['Close']) / 2
     
     ha['HA_Close'] = ha_close
     ha['HA_Open'] = ha_open.copy()
     
-    # Open = (Open_prev + Close_prev) / 2
     for i in range(1, len(df)):
         ha.loc[df.index[i], 'HA_Open'] = (ha.loc[df.index[i-1], 'HA_Open'] + ha.loc[df.index[i-1], 'HA_Close']) / 2
     
     ha['HA_High'] = df[['High', 'Open', 'Close']].max(axis=1)
     ha['HA_Low'] = df[['Low', 'Open', 'Close']].min(axis=1)
     
-    # Correzione per High/Low basati su HA
     for i in range(len(df)):
         ha.loc[df.index[i], 'HA_High'] = max(
             df.loc[df.index[i], 'High'],
@@ -72,6 +69,24 @@ def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     return ha
 
 # ============================================================================
+# FUNZIONE PALLINO RIASSUNTIVO (IDENTICA al giornaliero)
+# ============================================================================
+
+def get_bullet(score: float) -> str:
+    """
+    Restituisce il pallino in base allo score finale
+    🟢 Verde: score > 0.60 (trend rialzista)
+    ⚪ Bianco: 0.40 <= score <= 0.60 (laterale/neutro)
+    🔴 Rosso: score < 0.40 (trend ribassista)
+    """
+    if score > 0.60:
+        return "🟢"
+    elif score < 0.40:
+        return "🔴"
+    else:
+        return "⚪"
+
+# ============================================================================
 # INDICATORI SETTIMANALI (IDENTICI al giornaliero)
 # ============================================================================
 
@@ -82,17 +97,15 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
     Score: 0.0 (molto negativo) a 1.0 (molto positivo)
     """
     signals = []
-    score = 0.5  # Score base neutro
-    ha_color_score = 0.0  # Contributo Heikin Ashi
+    score = 0.5
+    ha_color_score = 0.0
     
     try:
-        # Download dati SETTIMANALI
         df = yf.download(ticker, period=WEEKLY_PERIOD, interval=WEEKLY_INTERVAL, progress=False)
         
         if df.empty or len(df) < WEEKLY_MIN_POINTS:
             return signals, score
         
-        # Pulizia dati
         if isinstance(df.columns, pd.MultiIndex):
             df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
             if isinstance(df.columns, pd.MultiIndex):
@@ -102,7 +115,7 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
         volume = df['Volume']
         
         # ================================================================
-        # 1. HEIKIN ASHI (PESO 0.35) - IDENTICO al giornaliero
+        # 1. HEIKIN ASHI (PESO 0.35)
         # ================================================================
         ha = calculate_heikin_ashi(df)
         
@@ -127,7 +140,7 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
                     ha_color_score -= 0.10
         
         # ================================================================
-        # 2. EMA10 vs MA31 (PESO 0.30) - IDENTICO al giornaliero
+        # 2. EMA10 vs MA31 (PESO 0.30)
         # ================================================================
         if len(close) >= 32:
             import ta
@@ -154,7 +167,7 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
                     score -= 0.15
         
         # ================================================================
-        # 3. RSI (PESO 0.20) - IDENTICO al giornaliero
+        # 3. RSI (PESO 0.20)
         # ================================================================
         if len(close) >= 15:
             import ta
@@ -173,7 +186,7 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
                     score -= 0.05
         
         # ================================================================
-        # 4. Volume (PESO 0.15) - IDENTICO al giornaliero
+        # 4. Volume (PESO 0.15)
         # ================================================================
         if len(volume) >= 10:
             avg_volume = float(volume.tail(10).mean())
@@ -185,7 +198,7 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
                 score -= 0.05
         
         # ================================================================
-        # COMBINAZIONE FINALE SCORE - IDENTICO al giornaliero
+        # COMBINAZIONE FINALE SCORE
         # ================================================================
         other_indicators_score = score
         ha_normalized = (ha_color_score + 0.45) / 0.9
@@ -199,11 +212,11 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
         return signals, 0.5
 
 # ============================================================================
-# FUNZIONI DI FORMATTAZIONE REPORT - IDENTICHE al giornaliero
+# FUNZIONI DI FORMATTAZIONE REPORT CON PALLINO (IDENTICHE al giornaliero)
 # ============================================================================
 
 def create_portfolio_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report per portafoglio"""
+    """Crea report per portafoglio con pallino"""
     if not results:
         return "💰 *PORTAFOGLIO* - Nessun segnale oggi"
     
@@ -214,7 +227,9 @@ def create_portfolio_report(results: List[Tuple[str, List[str], float]], descrip
     
     for ticker, signals, score in sorted_results:
         desc = descriptions.get(ticker, ticker)
-        lines.append(f"\n*{ticker}* - {desc}")
+        bullet = get_bullet(score)
+        
+        lines.append(f"\n{bullet} *{ticker}* - {desc} (score: {score:.3f})")
         
         if signals:
             for signal in signals:
@@ -225,7 +240,7 @@ def create_portfolio_report(results: List[Tuple[str, List[str], float]], descrip
     return "\n".join(lines)
 
 def create_watchlist_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report per watchlist"""
+    """Crea report per watchlist con pallino"""
     if not results:
         return "👁️ *WATCHLIST* - Nessun segnale oggi"
     
@@ -236,7 +251,9 @@ def create_watchlist_report(results: List[Tuple[str, List[str], float]], descrip
     
     for ticker, signals, score in sorted_results:
         desc = descriptions.get(ticker, ticker)
-        lines.append(f"\n*{ticker}* - {desc}")
+        bullet = get_bullet(score)
+        
+        lines.append(f"\n{bullet} *{ticker}* - {desc} (score: {score:.3f})")
         
         if signals:
             for signal in signals:
@@ -247,7 +264,7 @@ def create_watchlist_report(results: List[Tuple[str, List[str], float]], descrip
     return "\n".join(lines)
 
 # ============================================================================
-# FUNZIONI DI INVIO TELEGRAM - IDENTICHE al giornaliero
+# FUNZIONI DI INVIO TELEGRAM (IDENTICHE al giornaliero)
 # ============================================================================
 
 def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: bool = True) -> bool:
@@ -311,7 +328,7 @@ def main():
     
     try:
         print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI SETTIMANALE (Stessa logica del Giornaliero)")
+        print("📊 AGENTE DI TRADING - ANALISI SETTIMANALE (Stessa logica del Giornaliero + Pallino)")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
@@ -370,75 +387,4 @@ def main():
         watchlist_with_signals = sum(1 for _, signals, _ in watchlist_results if signals)
         
         print(f"Portafoglio con segnali: {portfolio_with_signals}/{len(portfolio)}")
-        print(f"Watchlist con segnali: {watchlist_with_signals}/{len(watchlist)}")
-        
-        if not portfolio_with_signals and not watchlist_with_signals:
-            print("📭 Nessun segnale da inviare oggi")
-            return
-        
-        # 5. Invio Telegram
-        token = os.getenv("TELEGRAM_BOT_TOKEN")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        
-        if not token or not chat_id:
-            print("⚠️ Credenziali Telegram non configurate")
-            print("   TELEGRAM_BOT_TOKEN:", "✅" if token else "❌")
-            print("   TELEGRAM_CHAT_ID:", "✅" if chat_id else "❌")
-            return
-        
-        print("\n📤 INVIO REPORT TELEGRAM")
-        print("-" * 40)
-        
-        # INVIO 1: PORTAFOGLIO
-        if portfolio_results:
-            print("\n1️⃣ INVIO PORTAFOGLIO")
-            portfolio_message = create_portfolio_report(portfolio_results, descriptions)
-            print(f"   Lunghezza: {len(portfolio_message)} caratteri")
-            
-            success = send_telegram_message(token, chat_id, portfolio_message, use_markdown=True)
-            
-            if success:
-                print("✅ Portafoglio inviato con successo!")
-            else:
-                print("❌ Errore nell'invio portafoglio")
-            
-            time.sleep(2)
-        
-        # INVIO 2: WATCHLIST
-        if watchlist_results:
-            print("\n2️⃣ INVIO WATCHLIST")
-            watchlist_message = create_watchlist_report(watchlist_results, descriptions)
-            print(f"   Lunghezza: {len(watchlist_message)} caratteri")
-            
-            success = send_telegram_message(token, chat_id, watchlist_message, use_markdown=True)
-            
-            if success:
-                print("✅ Watchlist inviata con successo!")
-            else:
-                print("❌ Errore nell'invio watchlist")
-        
-        # 6. Statistiche finali
-        elapsed_time = time.time() - start_time
-        print("\n" + "=" * 60)
-        print("🏁 ANALISI SETTIMANALE COMPLETATA")
-        print("-" * 40)
-        print(f"Tempo impiegato: {elapsed_time:.1f} secondi")
-        print(f"Ora completamento: {datetime.now().strftime('%H:%M:%S')}")
-        print("=" * 60)
-        
-    except KeyboardInterrupt:
-        print("\n\n⏹️ INTERROTTO DALL'UTENTE")
-        sys.exit(1)
-        
-    except Exception as e:
-        print(f"\n❌ ERRORE CRITICO: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-
-# ============================================================================
-# ESECUZIONE
-# ============================================================================
-
-if __name__ == "__main__":
-    main()
+        print(f"Watchlist con segnali: {watchlist_with_sign
