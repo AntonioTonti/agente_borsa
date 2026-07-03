@@ -229,7 +229,7 @@ def create_portfolio_report(results: List[Tuple[str, List[str], float]], descrip
         desc = descriptions.get(ticker, ticker)
         bullet = get_bullet(score)
         
-        lines.append(f"\n{bullet} *{ticker}* - {desc} (score: {score:.3f})")
+        lines.append(f"\n*{ticker}* - {desc} {bullet} (score: {score:.3f})")
         
         if signals:
             for signal in signals:
