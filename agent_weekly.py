@@ -387,4 +387,4 @@ def main():
         watchlist_with_signals = sum(1 for _, signals, _ in watchlist_results if signals)
         
         print(f"Portafoglio con segnali: {portfolio_with_signals}/{len(portfolio)}")
-        print(f"Watchlist con segnali: {watchlist_with_sign
+        print(f"Watchlist con segnali: {watchlist_with_sign}")
