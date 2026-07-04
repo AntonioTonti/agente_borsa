@@ -222,3 +222,225 @@ def create_watchlist_report(results: List[Tuple[str, List[str], float, Dict]], d
     
     lines = []
     lines.append("👁️ *OSSERVATI SETTIMANALI*")
+    
+    for ticker, signals, score, extra_data in sorted_results:
+        desc = descriptions.get(ticker, ticker)
+        bullet = get_bullet(score)
+        
+        lines.append(f"\n*{ticker}* - {desc} {bullet} (score: {score:.3f})")
+        
+        if signals:
+            for signal in signals:
+                lines.append(f"  {signal}")
+        else:
+            lines.append(f"  📭 Nessun segnale rilevato")
+        
+        # Aggiungi stima trend se disponibile
+        if extra_data and 'var_percent' in extra_data:
+            trend_line = format_trend_line(
+                extra_data['var_percent'],
+                extra_data['target_price'],
+                extra_data['stop_loss']
+            )
+            lines.append(trend_line)
+        
+        lines.append("----------------------------")
+    
+    return "\n".join(lines)
+
+# ============================================================================
+# FUNZIONI DI INVIO TELEGRAM
+# ============================================================================
+
+def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: bool = True) -> bool:
+    """Invia un messaggio a Telegram con gestione errori"""
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        
+        MAX_LENGTH = 4096
+        
+        if len(message) > MAX_LENGTH:
+            parts = []
+            lines = message.split('\n')
+            current_part = []
+            current_length = 0
+            
+            for line in lines:
+                if current_length + len(line) + 1 > MAX_LENGTH:
+                    parts.append('\n'.join(current_part))
+                    current_part = [line]
+                    current_length = len(line)
+                else:
+                    current_part.append(line)
+                    current_length += len(line) + 1
+            
+            if current_part:
+                parts.append('\n'.join(current_part))
+        else:
+            parts = [message]
+        
+        for i, part in enumerate(parts):
+            payload = {
+                "chat_id": chat_id,
+                "text": part,
+                "parse_mode": "Markdown" if (use_markdown and i == 0) else None,
+                "disable_web_page_preview": True,
+                "disable_notification": (i > 0)
+            }
+            
+            resp = requests.post(url, json=payload, timeout=15)
+            
+            if resp.status_code != 200:
+                print(f"    ❌ Errore invio parte {i+1}: {resp.status_code}")
+                return False
+            
+            if i < len(parts) - 1:
+                time.sleep(0.5)
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Errore invio Telegram: {e}")
+        return False
+
+# ============================================================================
+# FUNZIONE PRINCIPALE
+# ============================================================================
+
+def main():
+    """Funzione principale - Analisi settimanale con logica giornaliera"""
+    start_time = time.time()
+    
+    try:
+        print("=" * 60)
+        print("📊 AGENTE DI TRADING - ANALISI SETTIMANALE (Stessa logica del Giornaliero + Pallino + Trend)")
+        print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        print("=" * 60)
+        
+        # 1. Caricamento titoli
+        print("\n📁 CARICAMENTO TITOLI")
+        print("-" * 40)
+        
+        portfolio, watchlist, descriptions = load_titoli_csv()
+        print(f"✅ Titoli caricati:")
+        print(f"   • Portafoglio: {len(portfolio)} titoli")
+        print(f"   • Watchlist: {len(watchlist)} titoli")
+        
+        if not portfolio and not watchlist:
+            print("❌ Nessun titolo da analizzare")
+            return
+        
+        # 2. Analisi Portafoglio
+        portfolio_results = []
+        if portfolio:
+            print(f"\n💰 ANALISI PORTAFOGLIO (dati SETTIMANALI)")
+            print("-" * 40)
+            
+            for i, ticker in enumerate(portfolio, 1):
+                print(f"[{i}/{len(portfolio)}] {ticker}...", end="", flush=True)
+                signals, score, extra_data = analyze_weekly_ticker(ticker)
+                
+                if signals:
+                    portfolio_results.append((ticker, signals, score, extra_data))
+                    print(f" ✅ {len(signals)} segnali (score: {score})")
+                else:
+                    portfolio_results.append((ticker, [], score, extra_data))
+                    print(f" 📭 nessun segnale (score: {score})")
+        
+        # 3. Analisi Watchlist
+        watchlist_results = []
+        if watchlist:
+            print(f"\n👁️ ANALISI WATCHLIST (dati SETTIMANALI)")
+            print("-" * 40)
+            
+            for i, ticker in enumerate(watchlist, 1):
+                print(f"[{i}/{len(watchlist)}] {ticker}...", end="", flush=True)
+                signals, score, extra_data = analyze_weekly_ticker(ticker)
+                
+                if signals:
+                    watchlist_results.append((ticker, signals, score, extra_data))
+                    print(f" ✅ {len(signals)} segnali (score: {score})")
+                else:
+                    watchlist_results.append((ticker, [], score, extra_data))
+                    print(f" 📭 nessun segnale (score: {score})")
+        
+        # 4. Verifica risultati
+        print("\n📊 RIEPILOGO RISULTATI")
+        print("-" * 40)
+        
+        portfolio_with_signals = sum(1 for _, signals, _, _ in portfolio_results if signals)
+        watchlist_with_signals = sum(1 for _, signals, _, _ in watchlist_results if signals)
+        
+        print(f"Portafoglio con segnali: {portfolio_with_signals}/{len(portfolio)}")
+        print(f"Watchlist con segnali: {watchlist_with_signals}/{len(watchlist)}")
+        
+        if not portfolio_with_signals and not watchlist_with_signals:
+            print("📭 Nessun segnale da inviare oggi")
+            return
+        
+        # 5. Invio Telegram
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        
+        if not token or not chat_id:
+            print("⚠️ Credenziali Telegram non configurate")
+            print("   TELEGRAM_BOT_TOKEN:", "✅" if token else "❌")
+            print("   TELEGRAM_CHAT_ID:", "✅" if chat_id else "❌")
+            return
+        
+        print("\n📤 INVIO REPORT TELEGRAM")
+        print("-" * 40)
+        
+        # INVIO 1: PORTAFOGLIO
+        if portfolio_results:
+            print("\n1️⃣ INVIO PORTAFOGLIO")
+            portfolio_message = create_portfolio_report(portfolio_results, descriptions)
+            print(f"   Lunghezza: {len(portfolio_message)} caratteri")
+            
+            success = send_telegram_message(token, chat_id, portfolio_message, use_markdown=True)
+            
+            if success:
+                print("✅ Portafoglio inviato con successo!")
+            else:
+                print("❌ Errore nell'invio portafoglio")
+            
+            time.sleep(2)
+        
+        # INVIO 2: WATCHLIST
+        if watchlist_results:
+            print("\n2️⃣ INVIO WATCHLIST")
+            watchlist_message = create_watchlist_report(watchlist_results, descriptions)
+            print(f"   Lunghezza: {len(watchlist_message)} caratteri")
+            
+            success = send_telegram_message(token, chat_id, watchlist_message, use_markdown=True)
+            
+            if success:
+                print("✅ Watchlist inviata con successo!")
+            else:
+                print("❌ Errore nell'invio watchlist")
+        
+        # 6. Statistiche finali
+        elapsed_time = time.time() - start_time
+        print("\n" + "=" * 60)
+        print("🏁 ANALISI SETTIMANALE COMPLETATA")
+        print("-" * 40)
+        print(f"Tempo impiegato: {elapsed_time:.1f} secondi")
+        print(f"Ora completamento: {datetime.now().strftime('%H:%M:%S')}")
+        print("=" * 60)
+        
+    except KeyboardInterrupt:
+        print("\n\n⏹️ INTERROTTO DALL'UTENTE")
+        sys.exit(1)
+        
+    except Exception as e:
+        print(f"\n❌ ERRORE CRITICO: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+# ============================================================================
+# ESECUZIONE
+# ============================================================================
+
+if __name__ == "__main__":
+    main()
