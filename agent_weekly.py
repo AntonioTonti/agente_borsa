@@ -5,7 +5,7 @@ Invio: Venerdì 18:00 UTC (19:00 IT)
 FEATURES:
 - STESSA ANALISI del giornaliero (Heikin Ashi, EMA, RSI, Volume)
 - MA su Dati SETTIMANALI invece che giornalieri
-- Pallino riassuntivo 🟢/⚪/🔴 vicino al ticker
+- Pallino riassuntivo 🟢/⚪/🔴 a destra del nome
 - Analisi separata per Portafoglio e Watchlist
 - Due invii Telegram distinti
 """
@@ -212,18 +212,18 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
         return signals, 0.5
 
 # ============================================================================
-# FUNZIONI DI FORMATTAZIONE REPORT CON PALLINO (IDENTICHE al giornaliero)
+# FUNZIONI DI FORMATTAZIONE REPORT CON PALLINO A DESTRA
 # ============================================================================
 
 def create_portfolio_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report per portafoglio con pallino"""
+    """Crea report per portafoglio con pallino a destra"""
     if not results:
-        return "💰 *PORTAFOGLIO settimanale* - Nessun segnale oggi"
+        return "💰 *PORTAFOGLIO (su base settimanale)* - Nessun segnale oggi"
     
     sorted_results = sorted(results, key=lambda x: x[2])
     
     lines = []
-    lines.append("💰 *PORTAFOGLIO settimanale*")
+    lines.append("💰 *PORTAFOGLIO (su base settimanale)*")
     
     for ticker, signals, score in sorted_results:
         desc = descriptions.get(ticker, ticker)
@@ -240,14 +240,14 @@ def create_portfolio_report(results: List[Tuple[str, List[str], float]], descrip
     return "\n".join(lines)
 
 def create_watchlist_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report per watchlist con pallino"""
+    """Crea report per watchlist con pallino a destra"""
     if not results:
-        return "👁️ *WATCHLIST settimanale* - Nessun segnale oggi"
+        return "👁️ *OSSERVATI (su base settimanale)* - Nessun segnale oggi"
     
     sorted_results = sorted(results, key=lambda x: x[2])
     
     lines = []
-    lines.append("👁️ *WATCHLIST settimanale*")
+    lines.append("👁️ *OSSERVATI (su base settimanale)*")
     
     for ticker, signals, score in sorted_results:
         desc = descriptions.get(ticker, ticker)
@@ -264,7 +264,7 @@ def create_watchlist_report(results: List[Tuple[str, List[str], float]], descrip
     return "\n".join(lines)
 
 # ============================================================================
-# FUNZIONI DI INVIO TELEGRAM (IDENTICHE al giornaliero)
+# FUNZIONI DI INVIO TELEGRAM
 # ============================================================================
 
 def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: bool = True) -> bool:
@@ -387,4 +387,75 @@ def main():
         watchlist_with_signals = sum(1 for _, signals, _ in watchlist_results if signals)
         
         print(f"Portafoglio con segnali: {portfolio_with_signals}/{len(portfolio)}")
-        print(f"Watchlist con segnali: {watchlist_with_sign}")
+        print(f"Watchlist con segnali: {watchlist_with_signals}/{len(watchlist)}")
+        
+        if not portfolio_with_signals and not watchlist_with_signals:
+            print("📭 Nessun segnale da inviare oggi")
+            return
+        
+        # 5. Invio Telegram
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        
+        if not token or not chat_id:
+            print("⚠️ Credenziali Telegram non configurate")
+            print("   TELEGRAM_BOT_TOKEN:", "✅" if token else "❌")
+            print("   TELEGRAM_CHAT_ID:", "✅" if chat_id else "❌")
+            return
+        
+        print("\n📤 INVIO REPORT TELEGRAM")
+        print("-" * 40)
+        
+        # INVIO 1: PORTAFOGLIO
+        if portfolio_results:
+            print("\n1️⃣ INVIO PORTAFOGLIO")
+            portfolio_message = create_portfolio_report(portfolio_results, descriptions)
+            print(f"   Lunghezza: {len(portfolio_message)} caratteri")
+            
+            success = send_telegram_message(token, chat_id, portfolio_message, use_markdown=True)
+            
+            if success:
+                print("✅ Portafoglio inviato con successo!")
+            else:
+                print("❌ Errore nell'invio portafoglio")
+            
+            time.sleep(2)
+        
+        # INVIO 2: WATCHLIST
+        if watchlist_results:
+            print("\n2️⃣ INVIO WATCHLIST")
+            watchlist_message = create_watchlist_report(watchlist_results, descriptions)
+            print(f"   Lunghezza: {len(watchlist_message)} caratteri")
+            
+            success = send_telegram_message(token, chat_id, watchlist_message, use_markdown=True)
+            
+            if success:
+                print("✅ Watchlist inviata con successo!")
+            else:
+                print("❌ Errore nell'invio watchlist")
+        
+        # 6. Statistiche finali
+        elapsed_time = time.time() - start_time
+        print("\n" + "=" * 60)
+        print("🏁 ANALISI SETTIMANALE COMPLETATA")
+        print("-" * 40)
+        print(f"Tempo impiegato: {elapsed_time:.1f} secondi")
+        print(f"Ora completamento: {datetime.now().strftime('%H:%M:%S')}")
+        print("=" * 60)
+        
+    except KeyboardInterrupt:
+        print("\n\n⏹️ INTERROTTO DALL'UTENTE")
+        sys.exit(1)
+        
+    except Exception as e:
+        print(f"\n❌ ERRORE CRITICO: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+# ============================================================================
+# ESECUZIONE
+# ============================================================================
+
+if __name__ == "__main__":
+    main()
