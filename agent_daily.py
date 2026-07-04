@@ -7,7 +7,8 @@ FEATURES:
 - EMA10 vs MA31 (peso 0.30)
 - RSI (peso 0.20)
 - Volume (peso 0.15)
-- Pallino riassuntivo 🟢/⚪/🔴 vicino al ticker
+- Pallino riassuntivo 🟢/⚪/🔴 a destra del nome
+- Stima Trend (7 giorni) con Target e Stop Loss
 - Analisi separata per Portafoglio e Watchlist
 - Due invii Telegram distinti
 - Titoli ordinati dal peggiore al migliore
@@ -28,85 +29,33 @@ sys.path.append('.')
 from config import (
     load_titoli_csv, DAILY_PERIOD, DAILY_INTERVAL, DAILY_MIN_POINTS
 )
-
-# ============================================================================
-# FUNZIONE HEIKIN ASHI
-# ============================================================================
-
-def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calcola le barre Heikin Ashi a partire da un DataFrame OHLCV
-    Restituisce un DataFrame con le colonne HA_Open, HA_High, HA_Low, HA_Close
-    """
-    ha = pd.DataFrame(index=df.index)
-    
-    # Prima barra: Heikin Ashi = normale
-    ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
-    ha_open = (df['Open'] + df['Close']) / 2
-    
-    ha['HA_Close'] = ha_close
-    ha['HA_Open'] = ha_open.copy()
-    
-    # Open = (Open_prev + Close_prev) / 2
-    for i in range(1, len(df)):
-        ha.loc[df.index[i], 'HA_Open'] = (ha.loc[df.index[i-1], 'HA_Open'] + ha.loc[df.index[i-1], 'HA_Close']) / 2
-    
-    ha['HA_High'] = df[['High', 'Open', 'Close']].max(axis=1)
-    ha['HA_Low'] = df[['Low', 'Open', 'Close']].min(axis=1)
-    
-    # Correzione per High/Low basati su HA
-    for i in range(len(df)):
-        ha.loc[df.index[i], 'HA_High'] = max(
-            df.loc[df.index[i], 'High'],
-            ha.loc[df.index[i], 'HA_Open'],
-            ha.loc[df.index[i], 'HA_Close']
-        )
-        ha.loc[df.index[i], 'HA_Low'] = min(
-            df.loc[df.index[i], 'Low'],
-            ha.loc[df.index[i], 'HA_Open'],
-            ha.loc[df.index[i], 'HA_Close']
-        )
-    
-    return ha
-
-# ============================================================================
-# FUNZIONE PALLINO RIASSUNTIVO
-# ============================================================================
-
-def get_bullet(score: float) -> str:
-    """
-    Restituisce il pallino in base allo score finale
-    🟢 Verde: score > 0.60 (trend rialzista)
-    ⚪ Bianco: 0.40 <= score <= 0.60 (laterale/neutro)
-    🔴 Rosso: score < 0.40 (trend ribassista)
-    """
-    if score > 0.60:
-        return "🟢"
-    elif score < 0.40:
-        return "🔴"
-    else:
-        return "⚪"
+from analysis_utils import (
+    calculate_heikin_ashi,
+    get_bullet,
+    calculate_trend_estimate,
+    format_trend_line
+)
 
 # ============================================================================
 # INDICATORI GIORNALIERI (CON HEIKIN ASHI)
 # ============================================================================
 
-def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float]:
+def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     """
-    Analisi rapida giornaliera con calcolo score
-    Restituisce: (segnali, score)
-    Score: 0.0 (molto negativo) a 1.0 (molto positivo)
+    Analisi rapida giornaliera con calcolo score e stima trend
+    Restituisce: (segnali, score, dati_aggiuntivi)
     """
     signals = []
-    score = 0.5  # Score base neutro
-    ha_color_score = 0.0  # Contributo Heikin Ashi
+    score = 0.5
+    ha_color_score = 0.0
+    extra_data = {}  # Per dati di trend, target, stop loss
     
     try:
         # Download dati
         df = yf.download(ticker, period=DAILY_PERIOD, interval=DAILY_INTERVAL, progress=False)
         
         if df.empty or len(df) < DAILY_MIN_POINTS:
-            return signals, score
+            return signals, score, extra_data
         
         # Pulizia dati
         if isinstance(df.columns, pd.MultiIndex):
@@ -116,6 +65,17 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float]:
         
         close = df['Close']
         volume = df['Volume']
+        
+        # ================================================================
+        # STIMA TREND (7 giorni)
+        # ================================================================
+        if len(close) >= 10:
+            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
+            extra_data = {
+                'var_percent': var_percent,
+                'target_price': target_price,
+                'stop_loss': stop_loss
+            }
         
         # ================================================================
         # 1. HEIKIN ASHI (PESO 0.35)
@@ -208,27 +168,27 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float]:
         final_score = (ha_normalized * 0.35) + (other_indicators_score * 0.65)
         final_score = max(0.0, min(1.0, final_score))
         
-        return signals, round(final_score, 3)
+        return signals, round(final_score, 3), extra_data
         
     except Exception as e:
         print(f"❌ {ticker}: {e}")
-        return signals, 0.5
+        return signals, 0.5, extra_data
 
 # ============================================================================
-# FUNZIONI DI FORMATTAZIONE REPORT CON PALLINO
+# FUNZIONI DI FORMATTAZIONE REPORT CON PALLINO A DESTRA E TREND
 # ============================================================================
 
-def create_portfolio_daily_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report giornaliero per portafoglio con pallino"""
+def create_portfolio_daily_report(results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+    """Crea report giornaliero per portafoglio con pallino a destra e stima trend"""
     if not results:
-        return "💰 *PORTAFOGLIO giornaliero* - Nessun segnale oggi"
+        return "💰 *PORTAFOGLIO* - Nessun segnale oggi"
     
     sorted_results = sorted(results, key=lambda x: x[2])
     
     lines = []
-    lines.append("💰 *PORTAFOGLIO giornaliero*")
+    lines.append("💰 *PORTAFOGLIO*")
     
-    for ticker, signals, score in sorted_results:
+    for ticker, signals, score, extra_data in sorted_results:
         desc = descriptions.get(ticker, ticker)
         bullet = get_bullet(score)
         
@@ -239,20 +199,31 @@ def create_portfolio_daily_report(results: List[Tuple[str, List[str], float]], d
                 lines.append(f"  {signal}")
         else:
             lines.append(f"  📭 Nessun segnale rilevato")
+        
+        # Aggiungi stima trend se disponibile
+        if extra_data and 'var_percent' in extra_data:
+            trend_line = format_trend_line(
+                extra_data['var_percent'],
+                extra_data['target_price'],
+                extra_data['stop_loss']
+            )
+            lines.append(trend_line)
+        
+        lines.append("----------------------------")
     
     return "\n".join(lines)
 
-def create_watchlist_daily_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report giornaliero per watchlist con pallino"""
+def create_watchlist_daily_report(results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+    """Crea report giornaliero per watchlist con pallino a destra e stima trend"""
     if not results:
-        return "👁️ *WATCHLIST giornaliero* - Nessun segnale oggi"
+        return "👁️ *WATCHLIST* - Nessun segnale oggi"
     
     sorted_results = sorted(results, key=lambda x: x[2])
     
     lines = []
-    lines.append("👁️ *WATCHLIST giornaliero*")
+    lines.append("👁️ *WATCHLIST*")
     
-    for ticker, signals, score in sorted_results:
+    for ticker, signals, score, extra_data in sorted_results:
         desc = descriptions.get(ticker, ticker)
         bullet = get_bullet(score)
         
@@ -263,6 +234,17 @@ def create_watchlist_daily_report(results: List[Tuple[str, List[str], float]], d
                 lines.append(f"  {signal}")
         else:
             lines.append(f"  📭 Nessun segnale rilevato")
+        
+        # Aggiungi stima trend se disponibile
+        if extra_data and 'var_percent' in extra_data:
+            trend_line = format_trend_line(
+                extra_data['var_percent'],
+                extra_data['target_price'],
+                extra_data['stop_loss']
+            )
+            lines.append(trend_line)
+        
+        lines.append("----------------------------")
     
     return "\n".join(lines)
 
@@ -331,7 +313,7 @@ def main():
     
     try:
         print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA (Heikin Ashi + Pallino)")
+        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA (Heikin Ashi + Pallino + Trend)")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
@@ -356,13 +338,13 @@ def main():
             
             for i, ticker in enumerate(portfolio, 1):
                 print(f"[{i}/{len(portfolio)}] {ticker}...", end="", flush=True)
-                signals, score = analyze_daily_ticker(ticker)
+                signals, score, extra_data = analyze_daily_ticker(ticker)
                 
                 if signals:
-                    portfolio_results.append((ticker, signals, score))
+                    portfolio_results.append((ticker, signals, score, extra_data))
                     print(f" ✅ {len(signals)} segnali (score: {score})")
                 else:
-                    portfolio_results.append((ticker, [], score))
+                    portfolio_results.append((ticker, [], score, extra_data))
                     print(f" 📭 nessun segnale (score: {score})")
         
         # 3. Analisi Watchlist
@@ -373,21 +355,21 @@ def main():
             
             for i, ticker in enumerate(watchlist, 1):
                 print(f"[{i}/{len(watchlist)}] {ticker}...", end="", flush=True)
-                signals, score = analyze_daily_ticker(ticker)
+                signals, score, extra_data = analyze_daily_ticker(ticker)
                 
                 if signals:
-                    watchlist_results.append((ticker, signals, score))
+                    watchlist_results.append((ticker, signals, score, extra_data))
                     print(f" ✅ {len(signals)} segnali (score: {score})")
                 else:
-                    watchlist_results.append((ticker, [], score))
+                    watchlist_results.append((ticker, [], score, extra_data))
                     print(f" 📭 nessun segnale (score: {score})")
         
         # 4. Verifica risultati
         print("\n📊 RIEPILOGO RISULTATI")
         print("-" * 40)
         
-        portfolio_with_signals = sum(1 for _, signals, _ in portfolio_results if signals)
-        watchlist_with_signals = sum(1 for _, signals, _ in watchlist_results if signals)
+        portfolio_with_signals = sum(1 for _, signals, _, _ in portfolio_results if signals)
+        watchlist_with_signals = sum(1 for _, signals, _, _ in watchlist_results if signals)
         
         print(f"Portafoglio con segnali: {portfolio_with_signals}/{len(portfolio)}")
         print(f"Watchlist con segnali: {watchlist_with_signals}/{len(watchlist)}")
