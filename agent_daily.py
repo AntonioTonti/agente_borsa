@@ -181,12 +181,12 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
 def create_portfolio_daily_report(results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
     """Crea report giornaliero per portafoglio con pallino a destra e stima trend"""
     if not results:
-        return "💰 *PORTAFOGLIO* - Nessun segnale oggi"
+        return "💰 *PORTAFOGLIO GIORNALIERO* - Nessun segnale oggi"
     
     sorted_results = sorted(results, key=lambda x: x[2])
     
     lines = []
-    lines.append("💰 *PORTAFOGLIO*")
+    lines.append("💰 *PORTAFOGLIO GIORNALIERO*")
     
     for ticker, signals, score, extra_data in sorted_results:
         desc = descriptions.get(ticker, ticker)
@@ -216,12 +216,12 @@ def create_portfolio_daily_report(results: List[Tuple[str, List[str], float, Dic
 def create_watchlist_daily_report(results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
     """Crea report giornaliero per watchlist con pallino a destra e stima trend"""
     if not results:
-        return "👁️ *WATCHLIST* - Nessun segnale oggi"
+        return "👁️ *OSSERVATI GIORNALIERI* - Nessun segnale oggi"
     
     sorted_results = sorted(results, key=lambda x: x[2])
     
     lines = []
-    lines.append("👁️ *WATCHLIST*")
+    lines.append("👁️ *OSSERVATI GIORNALIERI*")
     
     for ticker, signals, score, extra_data in sorted_results:
         desc = descriptions.get(ticker, ticker)
