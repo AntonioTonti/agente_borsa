@@ -1,5 +1,5 @@
 name: Daily Trading Analysis
- 
+
 on:
   schedule:
     - cron: '47 11,16 * * 1-5'
@@ -9,20 +9,16 @@ on:
 jobs:
   daily-analysis:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout codice
         uses: actions/checkout@v4
-        
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-          
       - name: Installa dipendenze
         run: |
           pip install yfinance ta numpy pandas requests
-          
       - name: Esegui analisi giornaliera
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
