@@ -5,6 +5,7 @@ Invio: Venerdì 18:00 UTC (19:00 IT)
 FEATURES:
 - STESSA ANALISI del giornaliero (Heikin Ashi, EMA, RSI, Volume)
 - MA su Dati SETTIMANALI invece che giornalieri
+- Stima Trend (3 settimane) con Target e Stop Loss
 - Pallino riassuntivo 🟢/⚪/🔴 a destra del nome
 - Analisi separata per Portafoglio e Watchlist
 - Due invii Telegram distinti
@@ -25,6 +26,12 @@ sys.path.append('.')
 from config import (
     load_titoli_csv, DAILY_PERIOD, DAILY_INTERVAL, DAILY_MIN_POINTS
 )
+from analysis_utils import (
+    calculate_heikin_ashi,
+    get_bullet,
+    calculate_trend_estimate,
+    format_trend_line
+)
 
 # Costanti settimanali
 WEEKLY_PERIOD = "1y"      # 1 anno di dati
@@ -32,79 +39,24 @@ WEEKLY_INTERVAL = "1wk"   # Barre settimanali
 WEEKLY_MIN_POINTS = 20    # Minimo 20 settimane per l'analisi
 
 # ============================================================================
-# FUNZIONE HEIKIN ASHI (IDENTICA al giornaliero)
-# ============================================================================
-
-def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Calcola le barre Heikin Ashi a partire da un DataFrame OHLCV
-    Restituisce un DataFrame con le colonne HA_Open, HA_High, HA_Low, HA_Close
-    """
-    ha = pd.DataFrame(index=df.index)
-    
-    ha_close = (df['Open'] + df['High'] + df['Low'] + df['Close']) / 4
-    ha_open = (df['Open'] + df['Close']) / 2
-    
-    ha['HA_Close'] = ha_close
-    ha['HA_Open'] = ha_open.copy()
-    
-    for i in range(1, len(df)):
-        ha.loc[df.index[i], 'HA_Open'] = (ha.loc[df.index[i-1], 'HA_Open'] + ha.loc[df.index[i-1], 'HA_Close']) / 2
-    
-    ha['HA_High'] = df[['High', 'Open', 'Close']].max(axis=1)
-    ha['HA_Low'] = df[['Low', 'Open', 'Close']].min(axis=1)
-    
-    for i in range(len(df)):
-        ha.loc[df.index[i], 'HA_High'] = max(
-            df.loc[df.index[i], 'High'],
-            ha.loc[df.index[i], 'HA_Open'],
-            ha.loc[df.index[i], 'HA_Close']
-        )
-        ha.loc[df.index[i], 'HA_Low'] = min(
-            df.loc[df.index[i], 'Low'],
-            ha.loc[df.index[i], 'HA_Open'],
-            ha.loc[df.index[i], 'HA_Close']
-        )
-    
-    return ha
-
-# ============================================================================
-# FUNZIONE PALLINO RIASSUNTIVO (IDENTICA al giornaliero)
-# ============================================================================
-
-def get_bullet(score: float) -> str:
-    """
-    Restituisce il pallino in base allo score finale
-    🟢 Verde: score > 0.60 (trend rialzista)
-    ⚪ Bianco: 0.40 <= score <= 0.60 (laterale/neutro)
-    🔴 Rosso: score < 0.40 (trend ribassista)
-    """
-    if score > 0.60:
-        return "🟢"
-    elif score < 0.40:
-        return "🔴"
-    else:
-        return "⚪"
-
-# ============================================================================
 # INDICATORI SETTIMANALI (IDENTICI al giornaliero)
 # ============================================================================
 
-def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
+def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     """
     Analisi settimanale - STESSA LOGICA del giornaliero
-    Restituisce: (segnali, score)
-    Score: 0.0 (molto negativo) a 1.0 (molto positivo)
+    Restituisce: (segnali, score, dati_aggiuntivi)
     """
     signals = []
     score = 0.5
     ha_color_score = 0.0
+    extra_data = {}
     
     try:
         df = yf.download(ticker, period=WEEKLY_PERIOD, interval=WEEKLY_INTERVAL, progress=False)
         
         if df.empty or len(df) < WEEKLY_MIN_POINTS:
-            return signals, score
+            return signals, score, extra_data
         
         if isinstance(df.columns, pd.MultiIndex):
             df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
@@ -113,6 +65,17 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
         
         close = df['Close']
         volume = df['Volume']
+        
+        # ================================================================
+        # STIMA TREND (3 settimane)
+        # ================================================================
+        if len(close) >= 6:
+            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=3)
+            extra_data = {
+                'var_percent': var_percent,
+                'target_price': target_price,
+                'stop_loss': stop_loss
+            }
         
         # ================================================================
         # 1. HEIKIN ASHI (PESO 0.35)
@@ -205,18 +168,18 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float]:
         final_score = (ha_normalized * 0.35) + (other_indicators_score * 0.65)
         final_score = max(0.0, min(1.0, final_score))
         
-        return signals, round(final_score, 3)
+        return signals, round(final_score, 3), extra_data
         
     except Exception as e:
         print(f"❌ {ticker}: {e}")
-        return signals, 0.5
+        return signals, 0.5, extra_data
 
 # ============================================================================
-# FUNZIONI DI FORMATTAZIONE REPORT CON PALLINO A DESTRA
+# FUNZIONI DI FORMATTAZIONE REPORT CON PALLINO A DESTRA E TREND
 # ============================================================================
 
-def create_portfolio_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report per portafoglio con pallino a destra"""
+def create_portfolio_report(results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+    """Crea report per portafoglio con pallino a destra e stima trend"""
     if not results:
         return "💰 *PORTAFOGLIO (su base settimanale)* - Nessun segnale oggi"
     
@@ -225,7 +188,7 @@ def create_portfolio_report(results: List[Tuple[str, List[str], float]], descrip
     lines = []
     lines.append("💰 *PORTAFOGLIO (su base settimanale)*")
     
-    for ticker, signals, score in sorted_results:
+    for ticker, signals, score, extra_data in sorted_results:
         desc = descriptions.get(ticker, ticker)
         bullet = get_bullet(score)
         
@@ -236,11 +199,22 @@ def create_portfolio_report(results: List[Tuple[str, List[str], float]], descrip
                 lines.append(f"  {signal}")
         else:
             lines.append(f"  📭 Nessun segnale rilevato")
+        
+        # Aggiungi stima trend se disponibile
+        if extra_data and 'var_percent' in extra_data:
+            trend_line = format_trend_line(
+                extra_data['var_percent'],
+                extra_data['target_price'],
+                extra_data['stop_loss']
+            )
+            lines.append(trend_line)
+        
+        lines.append("----------------------------")
     
     return "\n".join(lines)
 
-def create_watchlist_report(results: List[Tuple[str, List[str], float]], descriptions: Dict) -> str:
-    """Crea report per watchlist con pallino a destra"""
+def create_watchlist_report(results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+    """Crea report per watchlist con pallino a destra e stima trend"""
     if not results:
         return "👁️ *OSSERVATI (su base settimanale)* - Nessun segnale oggi"
     
@@ -248,214 +222,3 @@ def create_watchlist_report(results: List[Tuple[str, List[str], float]], descrip
     
     lines = []
     lines.append("👁️ *OSSERVATI (su base settimanale)*")
-    
-    for ticker, signals, score in sorted_results:
-        desc = descriptions.get(ticker, ticker)
-        bullet = get_bullet(score)
-        
-        lines.append(f"\n*{ticker}* - {desc} {bullet} (score: {score:.3f})")
-        
-        if signals:
-            for signal in signals:
-                lines.append(f"  {signal}")
-        else:
-            lines.append(f"  📭 Nessun segnale rilevato")
-    
-    return "\n".join(lines)
-
-# ============================================================================
-# FUNZIONI DI INVIO TELEGRAM
-# ============================================================================
-
-def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: bool = True) -> bool:
-    """Invia un messaggio a Telegram con gestione errori"""
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        
-        MAX_LENGTH = 4096
-        
-        if len(message) > MAX_LENGTH:
-            parts = []
-            lines = message.split('\n')
-            current_part = []
-            current_length = 0
-            
-            for line in lines:
-                if current_length + len(line) + 1 > MAX_LENGTH:
-                    parts.append('\n'.join(current_part))
-                    current_part = [line]
-                    current_length = len(line)
-                else:
-                    current_part.append(line)
-                    current_length += len(line) + 1
-            
-            if current_part:
-                parts.append('\n'.join(current_part))
-        else:
-            parts = [message]
-        
-        for i, part in enumerate(parts):
-            payload = {
-                "chat_id": chat_id,
-                "text": part,
-                "parse_mode": "Markdown" if (use_markdown and i == 0) else None,
-                "disable_web_page_preview": True,
-                "disable_notification": (i > 0)
-            }
-            
-            resp = requests.post(url, json=payload, timeout=15)
-            
-            if resp.status_code != 200:
-                print(f"    ❌ Errore invio parte {i+1}: {resp.status_code}")
-                return False
-            
-            if i < len(parts) - 1:
-                time.sleep(0.5)
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Errore invio Telegram: {e}")
-        return False
-
-# ============================================================================
-# FUNZIONE PRINCIPALE
-# ============================================================================
-
-def main():
-    """Funzione principale - Analisi settimanale con logica giornaliera"""
-    start_time = time.time()
-    
-    try:
-        print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI SETTIMANALE (Stessa logica del Giornaliero + Pallino)")
-        print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
-        print("=" * 60)
-        
-        # 1. Caricamento titoli
-        print("\n📁 CARICAMENTO TITOLI")
-        print("-" * 40)
-        
-        portfolio, watchlist, descriptions = load_titoli_csv()
-        print(f"✅ Titoli caricati:")
-        print(f"   • Portafoglio: {len(portfolio)} titoli")
-        print(f"   • Watchlist: {len(watchlist)} titoli")
-        
-        if not portfolio and not watchlist:
-            print("❌ Nessun titolo da analizzare")
-            return
-        
-        # 2. Analisi Portafoglio
-        portfolio_results = []
-        if portfolio:
-            print(f"\n💰 ANALISI PORTAFOGLIO (dati SETTIMANALI)")
-            print("-" * 40)
-            
-            for i, ticker in enumerate(portfolio, 1):
-                print(f"[{i}/{len(portfolio)}] {ticker}...", end="", flush=True)
-                signals, score = analyze_weekly_ticker(ticker)
-                
-                if signals:
-                    portfolio_results.append((ticker, signals, score))
-                    print(f" ✅ {len(signals)} segnali (score: {score})")
-                else:
-                    portfolio_results.append((ticker, [], score))
-                    print(f" 📭 nessun segnale (score: {score})")
-        
-        # 3. Analisi Watchlist
-        watchlist_results = []
-        if watchlist:
-            print(f"\n👁️ ANALISI WATCHLIST (dati SETTIMANALI)")
-            print("-" * 40)
-            
-            for i, ticker in enumerate(watchlist, 1):
-                print(f"[{i}/{len(watchlist)}] {ticker}...", end="", flush=True)
-                signals, score = analyze_weekly_ticker(ticker)
-                
-                if signals:
-                    watchlist_results.append((ticker, signals, score))
-                    print(f" ✅ {len(signals)} segnali (score: {score})")
-                else:
-                    watchlist_results.append((ticker, [], score))
-                    print(f" 📭 nessun segnale (score: {score})")
-        
-        # 4. Verifica risultati
-        print("\n📊 RIEPILOGO RISULTATI")
-        print("-" * 40)
-        
-        portfolio_with_signals = sum(1 for _, signals, _ in portfolio_results if signals)
-        watchlist_with_signals = sum(1 for _, signals, _ in watchlist_results if signals)
-        
-        print(f"Portafoglio con segnali: {portfolio_with_signals}/{len(portfolio)}")
-        print(f"Watchlist con segnali: {watchlist_with_signals}/{len(watchlist)}")
-        
-        if not portfolio_with_signals and not watchlist_with_signals:
-            print("📭 Nessun segnale da inviare oggi")
-            return
-        
-        # 5. Invio Telegram
-        token = os.getenv("TELEGRAM_BOT_TOKEN")
-        chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        
-        if not token or not chat_id:
-            print("⚠️ Credenziali Telegram non configurate")
-            print("   TELEGRAM_BOT_TOKEN:", "✅" if token else "❌")
-            print("   TELEGRAM_CHAT_ID:", "✅" if chat_id else "❌")
-            return
-        
-        print("\n📤 INVIO REPORT TELEGRAM")
-        print("-" * 40)
-        
-        # INVIO 1: PORTAFOGLIO
-        if portfolio_results:
-            print("\n1️⃣ INVIO PORTAFOGLIO")
-            portfolio_message = create_portfolio_report(portfolio_results, descriptions)
-            print(f"   Lunghezza: {len(portfolio_message)} caratteri")
-            
-            success = send_telegram_message(token, chat_id, portfolio_message, use_markdown=True)
-            
-            if success:
-                print("✅ Portafoglio inviato con successo!")
-            else:
-                print("❌ Errore nell'invio portafoglio")
-            
-            time.sleep(2)
-        
-        # INVIO 2: WATCHLIST
-        if watchlist_results:
-            print("\n2️⃣ INVIO WATCHLIST")
-            watchlist_message = create_watchlist_report(watchlist_results, descriptions)
-            print(f"   Lunghezza: {len(watchlist_message)} caratteri")
-            
-            success = send_telegram_message(token, chat_id, watchlist_message, use_markdown=True)
-            
-            if success:
-                print("✅ Watchlist inviata con successo!")
-            else:
-                print("❌ Errore nell'invio watchlist")
-        
-        # 6. Statistiche finali
-        elapsed_time = time.time() - start_time
-        print("\n" + "=" * 60)
-        print("🏁 ANALISI SETTIMANALE COMPLETATA")
-        print("-" * 40)
-        print(f"Tempo impiegato: {elapsed_time:.1f} secondi")
-        print(f"Ora completamento: {datetime.now().strftime('%H:%M:%S')}")
-        print("=" * 60)
-        
-    except KeyboardInterrupt:
-        print("\n\n⏹️ INTERROTTO DALL'UTENTE")
-        sys.exit(1)
-        
-    except Exception as e:
-        print(f"\n❌ ERRORE CRITICO: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-
-# ============================================================================
-# ESECUZIONE
-# ============================================================================
-
-if __name__ == "__main__":
-    main()
