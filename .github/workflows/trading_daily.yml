@@ -1,4 +1,4 @@
-name: Daily Trading Analysis
+name: Daily Trading Analysis  
  
 on:
   schedule:
