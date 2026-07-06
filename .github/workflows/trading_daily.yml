@@ -2,7 +2,7 @@ name: Daily Trading Analysis
 
 on:
   schedule:
-    - cron: '47 11,16 * * 1-5'
+    - cron: '47 10,16 * * 1-5'
       timezone: "Europe/Rome"
   workflow_dispatch:
 
