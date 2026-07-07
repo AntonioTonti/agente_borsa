@@ -2,8 +2,10 @@ name: Daily Trading Analysis
 
 on:
   schedule:
-    - cron: '47 10,16 * * 1-5'
-      timezone: "Europe/Rome"
+    # 12:00 in Italia (10:00 UTC) durante l'ora legale
+    - cron: '0 10 * * 1-5'
+    # 17:15 in Italia (15:15 UTC) durante l'ora legale
+    - cron: '15 15 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -12,13 +14,24 @@ jobs:
     steps:
       - name: Checkout codice
         uses: actions/checkout@v4
+        
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
+          
+      - name: Cache dipendenze
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+            
       - name: Installa dipendenze
         run: |
           pip install yfinance ta numpy pandas requests
+          
       - name: Esegui analisi giornaliera
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
