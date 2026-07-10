@@ -2,10 +2,10 @@ name: Daily Trading Analysis
 
 on:
   schedule:
-    # 12:00 in Italia (10:00 UTC) durante l'ora legale
+    # 12:00 in Italia (10:00 UTC)
     - cron: '0 10 * * 1-5'
-    # 17:15 in Italia (15:15 UTC) durante l'ora legale
-    - cron: '15 15 * * 1-5'
+    # 17:30 in Italia (15:30 UTC)
+    - cron: '30 15 * * 1-5'
   workflow_dispatch:
 
 jobs:
