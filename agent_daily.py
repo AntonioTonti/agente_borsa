@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Agente di Trading - Analisi Giornaliera con Heikin Ashi e Pallino
+Agente di Trading - Analisi Giornaliera con Heikin Ashi, Indicatori e ZigZag
 Invio: 12:00 e 17:00 UTC (13:00 e 18:00 IT)
-FEATURES:
-- Heikin Ashi (peso 0.35) - barra verde/rossa
-- EMA10 vs MA31 (peso 0.30)
-- RSI (peso 0.20)
-- Volume (peso 0.15)
+FEATURES AGGIORNATE:
+- Heikin Ashi (peso 0.32) - barra verde/rossa
+- EMA10 vs MA31 (peso 0.28)
+- RSI (peso 0.18)
+- Volume (peso 0.12)
+- ZigZag Indicator (peso 0.10) - calcolo trend su inversioni
 - Pallino riassuntivo 🟢/⚪/🔴 a destra del nome
 - Stima Trend (7 giorni) con Target e Stop Loss
 - Analisi separata per Portafoglio e Watchlist
@@ -37,17 +38,65 @@ from analysis_utils import (
 )
 
 # ============================================================================
-# INDICATORI GIORNALIERI (CON HEIKIN ASHI)
+# FUNZIONE DI SUPPORTO PER CALCOLO ZIGZAG
+# ============================================================================
+def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
+    """
+    Calcola l'ultimo trend dell'indicatore ZigZag basato su massimi e minimi.
+    Ritorna: 1 se l'ultimo segmento è Rialzista, -1 se Ribassista, 0 se insufficiente.
+    """
+    if len(df) < 20:
+        return 0
+        
+    highs = df['High'].values
+    lows = df['Low'].values
+    
+    # Inizializzazione variabili
+    last_pivot_val = highs[0]
+    last_pivot_type = 'H' # H = High, L = Low
+    
+    trends = []
+    
+    thresh = deviation_pct / 100.0
+    
+    for i in range(1, len(df)):
+        if last_pivot_type == 'H':
+            if highs[i] > last_pivot_val:
+                last_pivot_val = highs[i]
+            elif lows[i] <= last_pivot_val * (1.0 - thresh):
+                last_pivot_val = lows[i]
+                last_pivot_type = 'L'
+                trends.append(-1) # Segmento ribassista completato
+        else:
+            if lows[i] < last_pivot_val:
+                last_pivot_val = lows[i]
+            elif highs[i] >= last_pivot_val * (1.0 + thresh):
+                last_pivot_val = highs[i]
+                last_pivot_type = 'H'
+                trends.append(1) # Segmento rialzista completato
+                
+    if not trends:
+        return 1 if last_pivot_type == 'H' else -1
+    return trends[-1]
+
+# ============================================================================
+# INDICATORI GIORNALIERI AGGIORNATI
 # ============================================================================
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     """
-    Analisi rapida giornaliera con calcolo score e stima trend
+    Analisi rapida giornaliera con calcolo score pesato e stima trend
     Restituisce: (segnali, score, dati_aggiuntivi)
     """
     signals = []
-    score = 0.5
-    ha_color_score = 0.0
+    
+    # Inizializzazione punteggi parziali (normalizzati tra 0 e 1, default neutrale 0.5)
+    ha_score = 0.5
+    ema_ma_score = 0.5
+    rsi_score = 0.5
+    vol_score = 0.5
+    zigzag_score = 0.5
+    
     extra_data = {}  # Per dati di trend, target, stop loss
     
     try:
@@ -55,7 +104,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         df = yf.download(ticker, period=DAILY_PERIOD, interval=DAILY_INTERVAL, progress=False)
         
         if df.empty or len(df) < DAILY_MIN_POINTS:
-            return signals, score, extra_data
+            return signals, 0.5, extra_data
         
         # Pulizia dati
         if isinstance(df.columns, pd.MultiIndex):
@@ -78,7 +127,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             }
         
         # ================================================================
-        # 1. HEIKIN ASHI (PESO 0.35)
+        # 1. HEIKIN ASHI (PESO 0.32)
         # ================================================================
         ha = calculate_heikin_ashi(df)
         
@@ -89,21 +138,19 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             
             if last_ha_close > last_ha_open:
                 signals.append("🟢 HEIKIN ASHI: BARRA VERDE (Trend rialzista)")
-                ha_color_score = 0.35
-                
+                ha_score = 0.85
                 if last_ha_close > prev_ha_close:
                     signals.append("   ↑ Rafforzamento: Chiusura > Chiusura precedente")
-                    ha_color_score += 0.10
+                    ha_score = 1.0
             else:
                 signals.append("🔴 HEIKIN ASHI: BARRA ROSSA (Trend ribassista)")
-                ha_color_score = -0.35
-                
+                ha_score = 0.15
                 if last_ha_close < prev_ha_close:
                     signals.append("   ↓ Indebolimento: Chiusura < Chiusura precedente")
-                    ha_color_score -= 0.10
+                    ha_score = 0.0
         
         # ================================================================
-        # 2. EMA10 vs MA31 (PESO 0.30)
+        # 2. EMA10 vs MA31 (PESO 0.28)
         # ================================================================
         if len(close) >= 32:
             import ta
@@ -118,19 +165,19 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 
                 if ema_now > ma_now and ema_prev <= ma_prev:
                     signals.append("📈 EMA10 > MA31 (CROSSOVER UP)")
-                    score += 0.25
+                    ema_ma_score = 1.0
                 elif ma_now > ema_now and ma_prev <= ema_prev:
                     signals.append("📉 MA31 > EMA10 (CROSSOVER DOWN)")
-                    score -= 0.25
+                    ema_ma_score = 0.0
                 elif ema_now > ma_now:
                     signals.append("🟢 EMA10 sopra MA31")
-                    score += 0.15
+                    ema_ma_score = 0.75
                 else:
                     signals.append("🔴 MA31 sopra EMA10")
-                    score -= 0.15
+                    ema_ma_score = 0.25
         
         # ================================================================
-        # 3. RSI (PESO 0.20)
+        # 3. RSI (PESO 0.18)
         # ================================================================
         if len(close) >= 15:
             import ta
@@ -139,33 +186,48 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 rsi_val = float(rsi.iloc[-1])
                 if rsi_val > 70:
                     signals.append("⚠️ RSI > 70 (IPERCOMPRATO)")
-                    score -= 0.15
+                    rsi_score = 0.15
                 elif rsi_val < 30:
                     signals.append("⚠️ RSI < 30 (IPERVENDUTO)")
-                    score += 0.10
+                    rsi_score = 0.85
                 elif rsi_val > 60:
-                    score += 0.05
+                    rsi_score = 0.65
                 elif rsi_val < 40:
-                    score -= 0.05
+                    rsi_score = 0.35
         
         # ================================================================
-        # 4. Volume (PESO 0.15)
+        # 4. Volume (PESO 0.12)
         # ================================================================
         if len(volume) >= 10:
             avg_volume = float(volume.tail(10).mean())
             current_volume = float(volume.iloc[-1])
             if current_volume > avg_volume * 1.5:
                 signals.append("📊 Volume +50%")
-                score += 0.10
+                vol_score = 0.80
             elif current_volume < avg_volume * 0.5:
-                score -= 0.05
+                vol_score = 0.30
         
         # ================================================================
-        # COMBINAZIONE FINALE SCORE
+        # 5. ZIGZAG (PESO 0.10) - NUOVO INDICATORE
         # ================================================================
-        other_indicators_score = score
-        ha_normalized = (ha_color_score + 0.45) / 0.9
-        final_score = (ha_normalized * 0.35) + (other_indicators_score * 0.65)
+        zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
+        if zz_trend == 1:
+            signals.append("⚡ ZIGZAG: Segmento Rialzista Attivo")
+            zigzag_score = 1.0
+        elif zz_trend == -1:
+            signals.append("⚡ ZIGZAG: Segmento Ribassista Attivo")
+            zigzag_score = 0.0
+
+        # ================================================================
+        # COMBINAZIONE FINALE SCORE (PESI AGGIORNATI AL 100%)
+        # ================================================================
+        final_score = (
+            (ha_score * 0.32) + 
+            (ema_ma_score * 0.28) + 
+            (rsi_score * 0.18) + 
+            (vol_score * 0.12) + 
+            (zigzag_score * 0.10)
+        )
         final_score = max(0.0, min(1.0, final_score))
         
         return signals, round(final_score, 3), extra_data
@@ -313,7 +375,7 @@ def main():
     
     try:
         print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA (Heikin Ashi + Pallino + Trend)")
+        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA CON ZIGZAG E PESI AGGIORNATI")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
@@ -323,8 +385,8 @@ def main():
         
         portfolio, watchlist, descriptions = load_titoli_csv()
         print(f"✅ Titoli caricati:")
-        print(f"   • Portafoglio: {len(portfolio)} titoli")
-        print(f"   • Watchlist: {len(watchlist)} titoli")
+        print(f"    • Portafoglio: {len(portfolio)} titoli")
+        print(f"    • Watchlist: {len(watchlist)} titoli")
         
         if not portfolio and not watchlist:
             print("❌ Nessun titolo da analizzare")
