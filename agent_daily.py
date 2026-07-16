@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Agente di Trading - Analisi Giornaliera con Heikin Ashi, Indicatori e ZigZag
+Agente di Trading - Analisi Giornaliera con Heikin Ashi (Pesi Dinamici), Indicatori e ZigZag
 Invio: 12:00 e 17:00 UTC (13:00 e 18:00 IT)
 FEATURES AGGIORNATE:
-- Heikin Ashi (peso 0.32) - barra verde/rossa
-- EMA10 vs MA31 (peso 0.28)
-- RSI (peso 0.18)
-- Volume (peso 0.12)
-- ZigZag Indicator (peso 0.10) - calcolo trend su inversioni
+- Heikin Ashi e RSI con PESI DINAMICI in base alla forma della candela (Totale combinato 0.50)
+- EMA10 vs MA31 (peso fisso 0.28)
+- Volume (peso fisso 0.12)
+- ZigZag Indicator (peso fisso 0.10) - calcolo trend su inversioni
 - Pallino riassuntivo 🟢/⚪/🔴 a destra del nome
 - Stima Trend (7 giorni) con Target e Stop Loss
 - Analisi separata per Portafoglio e Watchlist
@@ -51,12 +50,9 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
     highs = df['High'].values
     lows = df['Low'].values
     
-    # Inizializzazione variabili
     last_pivot_val = highs[0]
     last_pivot_type = 'H' # H = High, L = Low
-    
     trends = []
-    
     thresh = deviation_pct / 100.0
     
     for i in range(1, len(df)):
@@ -66,21 +62,71 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
             elif lows[i] <= last_pivot_val * (1.0 - thresh):
                 last_pivot_val = lows[i]
                 last_pivot_type = 'L'
-                trends.append(-1) # Segmento ribassista completato
+                trends.append(-1)
         else:
             if lows[i] < last_pivot_val:
                 last_pivot_val = lows[i]
             elif highs[i] >= last_pivot_val * (1.0 + thresh):
                 last_pivot_val = highs[i]
                 last_pivot_type = 'H'
-                trends.append(1) # Segmento rialzista completato
+                trends.append(1)
                 
     if not trends:
         return 1 if last_pivot_type == 'H' else -1
     return trends[-1]
 
 # ============================================================================
-# INDICATORI GIORNALIERI AGGIORNATI
+# CALCOLO DINAMICO DEI PESI (HEIKIN ASHI vs RSI)
+# ============================================================================
+def determine_ha_rsi_weights(ha_df: pd.DataFrame) -> Tuple[float, float, str]:
+    """
+    Analizza l'ultima candela Heikin Ashi e determina i pesi per HA e RSI.
+    Ritorna: (ha_weight, rsi_weight, descrizione_condizione)
+    """
+    # Pesi di default se non ci sono abbastanza dati storici per fare confronti
+    default_ha, default_rsi = 0.32, 0.18
+    if len(ha_df) < 6:
+        return default_ha, default_rsi, "Dati storici insufficienti (Default)"
+
+    # Calcoliamo le lunghezze dei corpi (Valore assoluto di Close - Open)
+    bodies = (ha_df['HA_Close'] - ha_df['HA_Open']).abs()
+    
+    last_body = bodies.iloc[-1]
+    prev_5_bodies_mean = bodies.iloc[-6:-1].mean() # Media delle 5 precedenti candele
+    
+    if prev_5_bodies_mean == 0:
+        return default_ha, default_rsi, "Media corpi precedente pari a zero (Default)"
+
+    # Informazioni sull'ultima candela
+    last_open = ha_df['HA_Open'].iloc[-1]
+    last_close = ha_df['HA_Close'].iloc[-1]
+    last_high = ha_df['HA_High'].iloc[-1]
+    last_low = ha_df['HA_Low'].iloc[-1]
+    
+    # Determina se ci sono ombre su entrambi i lati
+    # Ombra superiore: il massimo è superiore al massimo del corpo
+    # Ombra inferiore: il minimo è inferiore al minimo del corpo
+    max_body = max(last_open, last_close)
+    min_body = min(last_open, last_close)
+    
+    has_upper_shadow = last_high > (max_body + 1e-9)
+    has_lower_shadow = last_low < (min_body - 1e-9)
+    has_both_shadows = has_upper_shadow and has_lower_shadow
+
+    # 1. Condizione: Corpo < 50% della media E ombre su entrambi i lati
+    if last_body < (prev_5_bodies_mean * 0.5) and has_both_shadows:
+        return 0.26, 0.24, "Corpo piccolo (<50%) con ombre bilaterali [HA: 0.26 / RSI: 0.24]"
+        
+    # 2. Condizione: Corpo > 150% della media (ovvero il 50% superiore)
+    elif last_body > (prev_5_bodies_mean * 1.5):
+        return 0.32, 0.18, "Corpo grande (>150%) [HA: 0.32 / RSI: 0.18]"
+        
+    # 3. Condizione di default: Corpo in linea con la media (Default intermedio)
+    else:
+        return 0.28, 0.22, "Corpo in linea con la media [HA: 0.28 / RSI: 0.22]"
+
+# ============================================================================
+# INDICATORI GIORNALIERI
 # ============================================================================
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
@@ -127,9 +173,12 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             }
         
         # ================================================================
-        # 1. HEIKIN ASHI (PESO 0.32)
+        # 1. HEIKIN ASHI
         # ================================================================
         ha = calculate_heikin_ashi(df)
+        
+        # Determiniamo dinamicamente i pesi basandoci sull'analisi della candela
+        ha_weight, rsi_weight, ha_condition_desc = determine_ha_rsi_weights(ha)
         
         if len(ha) >= 2:
             last_ha_close = float(ha['HA_Close'].iloc[-1])
@@ -149,8 +198,11 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                     signals.append("   ↓ Indebolimento: Chiusura < Chiusura precedente")
                     ha_score = 0.0
         
+        # Aggiungiamo nei log interni quale peso è stato applicato
+        print(f" -> {ticker}: {ha_condition_desc}")
+
         # ================================================================
-        # 2. EMA10 vs MA31 (PESO 0.28)
+        # 2. EMA10 vs MA31 (PESO FISSO 0.28)
         # ================================================================
         if len(close) >= 32:
             import ta
@@ -177,7 +229,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                     ema_ma_score = 0.25
         
         # ================================================================
-        # 3. RSI (PESO 0.18)
+        # 3. RSI
         # ================================================================
         if len(close) >= 15:
             import ta
@@ -196,7 +248,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                     rsi_score = 0.35
         
         # ================================================================
-        # 4. Volume (PESO 0.12)
+        # 4. Volume (PESO FISSO 0.12)
         # ================================================================
         if len(volume) >= 10:
             avg_volume = float(volume.tail(10).mean())
@@ -208,7 +260,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 vol_score = 0.30
         
         # ================================================================
-        # 5. ZIGZAG (PESO 0.10) - NUOVO INDICATORE
+        # 5. ZIGZAG (PESO FISSO 0.10)
         # ================================================================
         zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
         if zz_trend == 1:
@@ -219,12 +271,12 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             zigzag_score = 0.0
 
         # ================================================================
-        # COMBINAZIONE FINALE SCORE (PESI AGGIORNATI AL 100%)
+        # COMBINAZIONE FINALE SCORE CON PESI DINAMICI (SOMMA SEMPRE 1.0)
         # ================================================================
         final_score = (
-            (ha_score * 0.32) + 
+            (ha_score * ha_weight) + 
+            (rsi_score * rsi_weight) + 
             (ema_ma_score * 0.28) + 
-            (rsi_score * 0.18) + 
             (vol_score * 0.12) + 
             (zigzag_score * 0.10)
         )
@@ -375,7 +427,7 @@ def main():
     
     try:
         print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA CON ZIGZAG E PESI AGGIORNATI")
+        print("📊 AGENTE DI TRADING - PESI DINAMICI HEIKIN/RSI + ZIGZAG")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
