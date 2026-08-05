@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Agente di Trading - Analisi Giornaliera con Heikin Ashi, Indicatori e ZigZag
+Agente di Trading - Analisi Giornaliera con Heikin Ashi, Indicatori e Trend
 Invio: 12:00 e 17:00 UTC (13:00 e 18:00 IT)
 FEATURES AGGIORNATE:
-- Heikin Ashi (peso dinamico basato su ADX: da 0.15 in laterale a 0.35 in trend)
-- EMA10 vs MA31 (peso dinamico)
-- RSI (peso dinamico - potenziato in fase laterale)
-- Volume (peso fisso 0.12)
-- ZigZag Indicator (peso fisso 0.10)
+- Heikin Ashi (peso 0.30)
+- EMA10 vs MA31 (peso 0.25)
+- Trend 7G Positivo/Laterale/Negativo (peso 0.20)
+- RSI (peso 0.15)
+- Volume (peso 0.10)
 - Pallino riassuntivo 🟢/⚪/🔴 a destra del nome
-- Stima Trend (7 giorni) con Target e Stop Loss
 - Analisi separata per Portafoglio e Watchlist
 - Due invii Telegram distinti
 - Titoli ordinati dal peggiore al migliore
@@ -38,54 +37,12 @@ from analysis_utils import (
 )
 
 # ============================================================================
-# FUNZIONE DI SUPPORTO PER CALCOLO ZIGZAG
-# ============================================================================
-def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
-    """
-    Calcola l'ultimo trend dell'indicatore ZigZag basato su massimi e minimi.
-    Ritorna: 1 se l'ultimo segmento è Rialzista, -1 se Ribassista, 0 se insufficiente.
-    """
-    if len(df) < 20:
-        return 0
-        
-    highs = df['High'].values
-    lows = df['Low'].values
-    
-    # Inizializzazione variabili
-    last_pivot_val = highs[0]
-    last_pivot_type = 'H' # H = High, L = Low
-    
-    trends = []
-    
-    thresh = deviation_pct / 100.0
-    
-    for i in range(1, len(df)):
-        if last_pivot_type == 'H':
-            if highs[i] > last_pivot_val:
-                last_pivot_val = highs[i]
-            elif lows[i] <= last_pivot_val * (1.0 - thresh):
-                last_pivot_val = lows[i]
-                last_pivot_type = 'L'
-                trends.append(-1) # Segmento ribassista completato
-        else:
-            if lows[i] < last_pivot_val:
-                last_pivot_val = lows[i]
-            elif highs[i] >= last_pivot_val * (1.0 + thresh):
-                last_pivot_val = highs[i]
-                last_pivot_type = 'H'
-                trends.append(1) # Segmento rialzista completato
-                
-    if not trends:
-        return 1 if last_pivot_type == 'H' else -1
-    return trends[-1]
-
-# ============================================================================
-# INDICATORI GIORNALIERI AGGIORNATI CON PESI DINAMICI
+# INDICATORI GIORNALIERI AGGIORNATI
 # ============================================================================
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     """
-    Analisi rapida giornaliera con calcolo score pesato adattivo (basato su ADX) e stima trend.
+    Analisi rapida giornaliera con calcolo score pesato e stima trend
     Restituisce: (segnali, score, dati_aggiuntivi)
     """
     signals = []
@@ -93,9 +50,9 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     # Inizializzazione punteggi parziali (normalizzati tra 0 e 1, default neutrale 0.5)
     ha_score = 0.5
     ema_ma_score = 0.5
+    trend_score = 0.5
     rsi_score = 0.5
     vol_score = 0.5
-    zigzag_score = 0.5
     
     extra_data = {}  # Per dati di trend, target, stop loss
     
@@ -116,62 +73,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         volume = df['Volume']
         
         # ================================================================
-        # STIMA TREND (7 giorni)
-        # ================================================================
-        if len(close) >= 10:
-            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
-            extra_data = {
-                'var_percent': var_percent,
-                'target_price': target_price,
-                'stop_loss': stop_loss
-            }
-        
-        # ================================================================
-        # 0. CALCOLO ADX PER DEFINIRE LA FORZA DEL TREND (E QUINDI I PESI)
-        # ================================================================
-        import ta
-        
-        # Valori di default della colonna "1" dell'allegato
-        ha_weight = 0.30
-        ema_ma_weight = 0.29
-        rsi_weight = 0.19
-        vol_weight = 0.12
-        zz_weight = 0.10
-        
-        if len(df) >= 28:
-            # Calcolo ADX (standard 14 periodi)
-            adx_series = ta.trend.adx(df['High'], df['Low'], df['Close'], window=14)
-            if not adx_series.empty and not np.isnan(adx_series.iloc[-1]):
-                adx_val = float(adx_series.iloc[-1])
-                extra_data['adx'] = adx_val
-                
-                # Definizione della logica dei pesi dinamici:
-                # - ADX < 20 (Fase laterale): Heikin Ashi penalizzato (0.15), RSI e EMA potenziati.
-                # - ADX > 25 (Trend forte): Heikin Ashi potenziato (0.35), RSI ridotto (più veloce, meno affidabile in trend).
-                # - 20 <= ADX <= 25: Transizione lineare.
-                if adx_val < 20:
-                    ha_weight = 0.15
-                    rsi_weight = 0.29  # RSI diventa molto importante in fase laterale
-                    ema_ma_weight = 0.34
-                elif adx_val > 25:
-                    ha_weight = 0.35   # Heikin Ashi prende il comando nel trend definito
-                    rsi_weight = 0.14  # RSI perde peso per evitare falsi segnali di ipercomprato/ipervenduto
-                    ema_ma_weight = 0.29
-                else:
-                    # Interpolazione lineare tra i due estremi
-                    factor = (adx_val - 20) / 5.0  # da 0.0 a 1.0
-                    ha_weight = 0.15 + (factor * 0.20)
-                    rsi_weight = 0.29 - (factor * 0.15)
-                    ema_ma_weight = 0.34 - (factor * 0.05)
-                
-                signals.append(f"ℹ️ ADX: {adx_val:.1f} (Pesi -> HA: {ha_weight:.2f} | RSI: {rsi_weight:.2f})")
-            else:
-                signals.append("ℹ️ ADX: Non calcolabile (Utilizzati pesi standard)")
-        else:
-            signals.append("ℹ️ ADX: Dati insufficienti (Utilizzati pesi standard)")
-
-        # ================================================================
-        # 1. HEIKIN ASHI
+        # 1. HEIKIN ASHI (PESO 0.30)
         # ================================================================
         ha = calculate_heikin_ashi(df)
         
@@ -192,11 +94,12 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 if last_ha_close < prev_ha_close:
                     signals.append("   ↓ Indebolimento: Chiusura < Chiusura precedente")
                     ha_score = 0.0
-        
+
         # ================================================================
-        # 2. EMA10 vs MA31
+        # 2. EMA10 vs MA31 (PESO 0.25)
         # ================================================================
         if len(close) >= 32:
+            import ta
             ema10 = ta.trend.ema_indicator(close, window=10)
             ma31 = ta.trend.sma_indicator(close, window=31)
             
@@ -218,27 +121,50 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 else:
                     signals.append("🔴 MA31 sopra EMA10")
                     ema_ma_score = 0.25
-        
+
         # ================================================================
-        # 3. RSI
+        # 3. STIMA TREND 7 GIORNI (PESO 0.20)
+        # ================================================================
+        if len(close) >= 10:
+            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
+            extra_data = {
+                'var_percent': var_percent,
+                'target_price': target_price,
+                'stop_loss': stop_loss
+            }
+            
+            # Valutazione del trend (Positivo, Laterale, Negativo)
+            if var_percent > 1.0:
+                signals.append(f"🚀 TREND (7G): POSITIVO (+{var_percent:.2f}%)")
+                trend_score = 1.0
+            elif var_percent < -1.0:
+                signals.append(f"🔻 TREND (7G): NEGATIVO ({var_percent:.2f}%)")
+                trend_score = 0.0
+            else:
+                signals.append(f"➡️ TREND (7G): LATERALE ({var_percent:+.2f}%)")
+                trend_score = 0.5
+
+        # ================================================================
+        # 4. RSI (PESO 0.15)
         # ================================================================
         if len(close) >= 15:
+            import ta
             rsi = ta.momentum.rsi(close, window=14)
             if len(rsi) > 0:
                 rsi_val = float(rsi.iloc[-1])
                 if rsi_val > 70:
-                    signals.append(f"⚠️ RSI: {rsi_val:.1f} > 70 (IPERCOMPRATO)")
+                    signals.append("⚠️ RSI > 70 (IPERCOMPRATO)")
                     rsi_score = 0.15
                 elif rsi_val < 30:
-                    signals.append(f"⚠️ RSI: {rsi_val:.1f} < 30 (IPERVENDUTO)")
+                    signals.append("⚠️ RSI < 30 (IPERVENDUTO)")
                     rsi_score = 0.85
                 elif rsi_val > 60:
                     rsi_score = 0.65
                 elif rsi_val < 40:
                     rsi_score = 0.35
-        
+
         # ================================================================
-        # 4. Volume (PESO FISSO 0.12)
+        # 5. VOLUME (PESO 0.10)
         # ================================================================
         if len(volume) >= 10:
             avg_volume = float(volume.tail(10).mean())
@@ -248,27 +174,16 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 vol_score = 0.80
             elif current_volume < avg_volume * 0.5:
                 vol_score = 0.30
-        
-        # ================================================================
-        # 5. ZIGZAG (PESO FISSO 0.10)
-        # ================================================================
-        zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
-        if zz_trend == 1:
-            signals.append("⚡ ZIGZAG: Segmento Rialzista Attivo")
-            zigzag_score = 1.0
-        elif zz_trend == -1:
-            signals.append("⚡ ZIGZAG: Segmento Ribassista Attivo")
-            zigzag_score = 0.0
 
         # ================================================================
-        # COMBINAZIONE FINALE SCORE CON PESI ADATTIVI
+        # COMBINAZIONE FINALE SCORE (PESI 100%)
         # ================================================================
         final_score = (
-            (ha_score * ha_weight) + 
-            (ema_ma_score * ema_ma_weight) + 
-            (rsi_score * rsi_weight) + 
-            (vol_score * vol_weight) + 
-            (zigzag_score * zz_weight)
+            (ha_score * 0.30) + 
+            (ema_ma_score * 0.25) + 
+            (trend_score * 0.20) + 
+            (rsi_score * 0.15) + 
+            (vol_score * 0.10)
         )
         final_score = max(0.0, min(1.0, final_score))
         
@@ -304,7 +219,6 @@ def create_portfolio_daily_report(results: List[Tuple[str, List[str], float, Dic
         else:
             lines.append(f"  📭 Nessun segnale rilevato")
         
-        # Aggiungi stima trend se disponibile
         if extra_data and 'var_percent' in extra_data:
             trend_line = format_trend_line(
                 extra_data['var_percent'],
@@ -339,7 +253,6 @@ def create_watchlist_daily_report(results: List[Tuple[str, List[str], float, Dic
         else:
             lines.append(f"  📭 Nessun segnale rilevato")
         
-        # Aggiungi stima trend se disponibile
         if extra_data and 'var_percent' in extra_data:
             trend_line = format_trend_line(
                 extra_data['var_percent'],
@@ -417,7 +330,7 @@ def main():
     
     try:
         print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA CON PESI DINAMICI (ADX)")
+        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA CON PESI AGGIORNATI")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
@@ -472,14 +385,14 @@ def main():
         print("\n📊 RIEPILOGO RISULTATI")
         print("-" * 40)
         
-        portfolio_with_signals = sum(1 for _, signals, _, _ in portfolio_results if any("🟢" in s or "🔴" in s or "📈" in s or "📉" in s or "⚡" in s for s in signals))
-        watchlist_with_signals = sum(1 for _, signals, _, _ in watchlist_results if any("🟢" in s or "🔴" in s or "📈" in s or "📉" in s or "⚡" in s for s in signals))
+        portfolio_with_signals = sum(1 for _, signals, _, _ in portfolio_results if signals)
+        watchlist_with_signals = sum(1 for _, signals, _, _ in watchlist_results if signals)
         
-        print(f"Portafoglio con segnali attivi: {portfolio_with_signals}/{len(portfolio)}")
-        print(f"Watchlist con segnali attivi: {watchlist_with_signals}/{len(watchlist)}")
+        print(f"Portafoglio con segnali: {portfolio_with_signals}/{len(portfolio)}")
+        print(f"Watchlist con segnali: {watchlist_with_signals}/{len(watchlist)}")
         
-        if not portfolio_results and not watchlist_results:
-            print("📭 Nessun dato da inviare oggi")
+        if not portfolio_with_signals and not watchlist_with_signals:
+            print("📭 Nessun segnale da inviare oggi")
             return
         
         # 5. Invio Telegram
@@ -499,7 +412,7 @@ def main():
         if portfolio_results:
             print("\n1️⃣ INVIO PORTAFOGLIO")
             portfolio_message = create_portfolio_daily_report(portfolio_results, descriptions)
-            print(f"    Lunghezza: {len(portfolio_message)} caratteri")
+            print(f"   Lunghezza: {len(portfolio_message)} caratteri")
             
             success = send_telegram_message(token, chat_id, portfolio_message, use_markdown=True)
             
@@ -514,7 +427,7 @@ def main():
         if watchlist_results:
             print("\n2️⃣ INVIO WATCHLIST")
             watchlist_message = create_watchlist_daily_report(watchlist_results, descriptions)
-            print(f"    Lunghezza: {len(watchlist_message)} caratteri")
+            print(f"   Lunghezza: {len(watchlist_message)} caratteri")
             
             success = send_telegram_message(token, chat_id, watchlist_message, use_markdown=True)
             
