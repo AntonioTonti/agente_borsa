@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Agente di Trading - Analisi Giornaliera con Heikin Ashi, Indicatori e Trend
+Agente di Trading - Analisi Giornaliera con Heikin Ashi, Indicatori e ZigZag
 Invio: 12:00 e 17:00 UTC (13:00 e 18:00 IT)
 FEATURES AGGIORNATE:
-- Heikin Ashi (peso 0.30)
+- Heikin Ashi (peso 0.30) - barra verde/rossa
 - EMA10 vs MA31 (peso 0.25)
-- Trend 7G Positivo/Laterale/Negativo (peso 0.20)
-- RSI (peso 0.15)
+- Trend 7gg (peso 0.20) - Positivo / Laterale / Negativo
+- ZigZag Indicator (peso 0.10) - calcolo trend su inversioni
 - Volume (peso 0.10)
+- RSI (peso 0.05)
 - Pallino riassuntivo 🟢/⚪/🔴 a destra del nome
+- Stima Trend (7 giorni) con Target e Stop Loss
 - Analisi separata per Portafoglio e Watchlist
 - Due invii Telegram distinti
 - Titoli ordinati dal peggiore al migliore
@@ -37,6 +39,48 @@ from analysis_utils import (
 )
 
 # ============================================================================
+# FUNZIONE DI SUPPORTO PER CALCOLO ZIGZAG
+# ============================================================================
+def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
+    """
+    Calcola l'ultimo trend dell'indicatore ZigZag basato su massimi e minimi.
+    Ritorna: 1 se l'ultimo segmento è Rialzista, -1 se Ribassista, 0 se insufficiente.
+    """
+    if len(df) < 20:
+        return 0
+        
+    highs = df['High'].values
+    lows = df['Low'].values
+    
+    # Inizializzazione variabili
+    last_pivot_val = highs[0]
+    last_pivot_type = 'H' # H = High, L = Low
+    
+    trends = []
+    
+    thresh = deviation_pct / 100.0
+    
+    for i in range(1, len(df)):
+        if last_pivot_type == 'H':
+            if highs[i] > last_pivot_val:
+                last_pivot_val = highs[i]
+            elif lows[i] <= last_pivot_val * (1.0 - thresh):
+                last_pivot_val = lows[i]
+                last_pivot_type = 'L'
+                trends.append(-1) # Segmento ribassista completato
+        else:
+            if lows[i] < last_pivot_val:
+                last_pivot_val = lows[i]
+            elif highs[i] >= last_pivot_val * (1.0 + thresh):
+                last_pivot_val = highs[i]
+                last_pivot_type = 'H'
+                trends.append(1) # Segmento rialzista completato
+                
+    if not trends:
+        return 1 if last_pivot_type == 'H' else -1
+    return trends[-1]
+
+# ============================================================================
 # INDICATORI GIORNALIERI AGGIORNATI
 # ============================================================================
 
@@ -51,8 +95,9 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     ha_score = 0.5
     ema_ma_score = 0.5
     trend_score = 0.5
-    rsi_score = 0.5
+    zigzag_score = 0.5
     vol_score = 0.5
+    rsi_score = 0.5
     
     extra_data = {}  # Per dati di trend, target, stop loss
     
@@ -71,6 +116,29 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         
         close = df['Close']
         volume = df['Volume']
+        
+        # ================================================================
+        # STIMA TREND (7 giorni) E VALUTAZIONE TREND SCORE (PESO 0.20)
+        # ================================================================
+        if len(close) >= 10:
+            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
+            extra_data = {
+                'var_percent': var_percent,
+                'target_price': target_price,
+                'stop_loss': stop_loss
+            }
+            
+            # Valutazione del punteggio in base alla variazione a 7 giorni
+            if var_percent > 1.5:
+                trend_score = 1.0       # Trend fortemente positivo
+            elif var_percent > 0.0:
+                trend_score = 0.75      # Trend moderatamente positivo
+            elif var_percent > -1.5:
+                trend_score = 0.50      # Trend laterale
+            elif var_percent > -3.0:
+                trend_score = 0.25      # Trend moderatamente negativo
+            else:
+                trend_score = 0.0       # Trend fortemente negativo
         
         # ================================================================
         # 1. HEIKIN ASHI (PESO 0.30)
@@ -94,7 +162,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 if last_ha_close < prev_ha_close:
                     signals.append("   ↓ Indebolimento: Chiusura < Chiusura precedente")
                     ha_score = 0.0
-
+        
         # ================================================================
         # 2. EMA10 vs MA31 (PESO 0.25)
         # ================================================================
@@ -121,31 +189,32 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 else:
                     signals.append("🔴 MA31 sopra EMA10")
                     ema_ma_score = 0.25
+        
+        # ================================================================
+        # 3. ZIGZAG (PESO 0.10)
+        # ================================================================
+        zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
+        if zz_trend == 1:
+            signals.append("⚡ ZIGZAG: Segmento Rialzista Attivo")
+            zigzag_score = 1.0
+        elif zz_trend == -1:
+            signals.append("⚡ ZIGZAG: Segmento Ribassista Attivo")
+            zigzag_score = 0.0
 
         # ================================================================
-        # 3. STIMA TREND 7 GIORNI (PESO 0.20)
+        # 4. Volume (PESO 0.10)
         # ================================================================
-        if len(close) >= 10:
-            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
-            extra_data = {
-                'var_percent': var_percent,
-                'target_price': target_price,
-                'stop_loss': stop_loss
-            }
-            
-            # Valutazione del trend (Positivo, Laterale, Negativo)
-            if var_percent > 1.0:
-                signals.append(f"🚀 TREND (7G): POSITIVO (+{var_percent:.2f}%)")
-                trend_score = 1.0
-            elif var_percent < -1.0:
-                signals.append(f"🔻 TREND (7G): NEGATIVO ({var_percent:.2f}%)")
-                trend_score = 0.0
-            else:
-                signals.append(f"➡️ TREND (7G): LATERALE ({var_percent:+.2f}%)")
-                trend_score = 0.5
+        if len(volume) >= 10:
+            avg_volume = float(volume.tail(10).mean())
+            current_volume = float(volume.iloc[-1])
+            if current_volume > avg_volume * 1.5:
+                signals.append("📊 Volume +50%")
+                vol_score = 0.80
+            elif current_volume < avg_volume * 0.5:
+                vol_score = 0.30
 
         # ================================================================
-        # 4. RSI (PESO 0.15)
+        # 5. RSI (PESO 0.05)
         # ================================================================
         if len(close) >= 15:
             import ta
@@ -164,26 +233,15 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                     rsi_score = 0.35
 
         # ================================================================
-        # 5. VOLUME (PESO 0.10)
-        # ================================================================
-        if len(volume) >= 10:
-            avg_volume = float(volume.tail(10).mean())
-            current_volume = float(volume.iloc[-1])
-            if current_volume > avg_volume * 1.5:
-                signals.append("📊 Volume +50%")
-                vol_score = 0.80
-            elif current_volume < avg_volume * 0.5:
-                vol_score = 0.30
-
-        # ================================================================
-        # COMBINAZIONE FINALE SCORE (PESI 100%)
+        # COMBINAZIONE FINALE SCORE (PESI AGGIORNATI: TOTAL 1.00 / 100%)
         # ================================================================
         final_score = (
             (ha_score * 0.30) + 
             (ema_ma_score * 0.25) + 
             (trend_score * 0.20) + 
-            (rsi_score * 0.15) + 
-            (vol_score * 0.10)
+            (zigzag_score * 0.10) + 
+            (vol_score * 0.10) + 
+            (rsi_score * 0.05)
         )
         final_score = max(0.0, min(1.0, final_score))
         
@@ -219,6 +277,7 @@ def create_portfolio_daily_report(results: List[Tuple[str, List[str], float, Dic
         else:
             lines.append(f"  📭 Nessun segnale rilevato")
         
+        # Aggiungi stima trend se disponibile
         if extra_data and 'var_percent' in extra_data:
             trend_line = format_trend_line(
                 extra_data['var_percent'],
@@ -253,6 +312,7 @@ def create_watchlist_daily_report(results: List[Tuple[str, List[str], float, Dic
         else:
             lines.append(f"  📭 Nessun segnale rilevato")
         
+        # Aggiungi stima trend se disponibile
         if extra_data and 'var_percent' in extra_data:
             trend_line = format_trend_line(
                 extra_data['var_percent'],
@@ -330,7 +390,7 @@ def main():
     
     try:
         print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA CON PESI AGGIORNATI")
+        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA CON NUOVI PESI SCORE")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
