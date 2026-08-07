@@ -73,7 +73,7 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     """
-    Analisi giornaliera con nuovo mix pesi e nuova soglia Trend (3%)
+    Analisi giornaliera con esposizione completa di tutti i parametri ed errori numerici
     """
     signals = []
     
@@ -89,21 +89,22 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     extra_data = {}
     
     try:
-        # Download con 6 mesi di storico per calcolo stabile EMA/MA
+        # Download dati con storico di 6 mesi
         df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True, progress=False)
         
         if df.empty or len(df) < DAILY_MIN_POINTS:
             return signals, 0.5, extra_data
         
-        # Pulizia MultiIndex delle colonne per compatibilità yfinance recente
+        # Gestione MultiIndex
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
+            
+        df = df.dropna()
         
-        # Estrazione e normalizzazione a 1D
         close = df['Close'].squeeze()
         volume = df['Volume'].squeeze()
         
-        # 1. STIMA TREND 7 GIORNI (PESO 30% - SOGLIA 3.0%)
+        # 1. STIMA TREND 7 GIORNI (PESO 30%)
         if len(close) >= 10:
             var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
             extra_data = {
@@ -121,32 +122,38 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 trend_score = 0.25
             else:
                 trend_score = 0.0
-        
-        # 2. EMA10 vs MA31 (PESO 30%)
+
+        # 2. EMA10 vs MA31 (PESO 30%) - Mostra SEMPRE i valori calcolati
         if len(close) >= 32:
             ema10 = ta.trend.ema_indicator(close, window=10)
             ma31 = ta.trend.sma_indicator(close, window=31)
             
-            if len(ema10) > 1 and len(ma31) > 1:
-                ema_now = float(ema10.iloc[-1])
-                ma_now = float(ma31.iloc[-1])
-                ema_prev = float(ema10.iloc[-2])
-                ma_prev = float(ma31.iloc[-2])
+            clean_ema = ema10.dropna()
+            clean_ma = ma31.dropna()
+            
+            if len(clean_ema) > 1 and len(clean_ma) > 1:
+                ema_now = float(clean_ema.iloc[-1])
+                ma_now = float(clean_ma.iloc[-1])
+                ema_prev = float(clean_ema.iloc[-2])
+                ma_prev = float(clean_ma.iloc[-2])
+                
+                # Format dinamico decimali (per penny stock come Tessellis)
+                fmt = ".4f" if ema_now < 1.0 else ".2f"
                 
                 if ema_now > ma_now and ema_prev <= ma_prev:
-                    signals.append("📈 EMA10 > MA31 (CROSSOVER UP)")
+                    signals.append(f"📈 EMA10 ({ema_now:{fmt}}) > MA31 ({ma_now:{fmt}}) [CROSSOVER UP]")
                     ema_ma_score = 1.0
                 elif ma_now > ema_now and ma_prev <= ema_prev:
-                    signals.append("📉 MA31 > EMA10 (CROSSOVER DOWN)")
+                    signals.append(f"📉 MA31 ({ma_now:{fmt}}) > EMA10 ({ema_now:{fmt}}) [CROSSOVER DOWN]")
                     ema_ma_score = 0.0
                 elif ema_now > ma_now:
-                    signals.append("🟢 EMA10 sopra MA31")
+                    signals.append(f"🟢 EMA10 ({ema_now:{fmt}}) sopra MA31 ({ma_now:{fmt}})")
                     ema_ma_score = 0.75
                 else:
-                    signals.append("🔴 MA31 sopra EMA10")
+                    signals.append(f"🔴 MA31 ({ma_now:{fmt}}) sopra EMA10 ({ema_now:{fmt}})")
                     ema_ma_score = 0.25
 
-        # 3. HEIKIN ASHI (PESO 20%)
+        # 3. HEIKIN ASHI (PESO 20%) - Mostra SEMPRE lo stato
         ha = calculate_heikin_ashi(df)
         if len(ha) >= 2:
             last_ha_close = float(ha['HA_Close'].iloc[-1])
@@ -154,29 +161,71 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             last_ha_open = float(ha['HA_Open'].iloc[-1])
             
             if last_ha_close > last_ha_open:
-                signals.append("🟢 HEIKIN ASHI: BARRA VERDE")
-                ha_score = 0.85
+                msg = "🟢 HEIKIN ASHI: BARRA VERDE"
                 if last_ha_close > prev_ha_close:
-                    signals.append("    ↑ Rafforzamento: Chiusura > Chiusura precedente")
+                    msg += " (↑ Rafforzamento)"
                     ha_score = 1.0
+                else:
+                    ha_score = 0.85
+                signals.append(msg)
             else:
-                signals.append("🔴 HEIKIN ASHI: BARRA ROSSA")
-                ha_score = 0.15
+                msg = "🔴 HEIKIN ASHI: BARRA ROSSA"
                 if last_ha_close < prev_ha_close:
-                    signals.append("    ↓ Indebolimento: Chiusura < Chiusura precedente")
+                    msg += " (↓ Indebolimento)"
                     ha_score = 0.0
+                else:
+                    ha_score = 0.15
+                signals.append(msg)
 
-        # 4. VOLUME (PESO 5%)
+        # 4. RSI 14 (PESO 5%) - Mostra SEMPRE il valore dell'RSI
+        if len(close) >= 15:
+            rsi = ta.momentum.rsi(close, window=14).dropna()
+            if not rsi.empty:
+                rsi_val = float(rsi.iloc[-1])
+                if rsi_val > 70:
+                    signals.append(f"⚠️ RSI: {rsi_val:.1f} (IPERCOMPRATO)")
+                    rsi_score = 0.15
+                elif rsi_val < 30:
+                    signals.append(f"⚠️ RSI: {rsi_val:.1f} (IPERVENDUTO)")
+                    rsi_score = 0.85
+                else:
+                    signals.append(f"📊 RSI: {rsi_val:.1f} (Neutro)")
+                    if rsi_val > 60:
+                        rsi_score = 0.65
+                    elif rsi_val < 40:
+                        rsi_score = 0.35
+                    else:
+                        rsi_score = 0.50
+
+        # 5. VOLUME (PESO 5%) - Mostra SEMPRE il confronto con la media
         if len(volume) >= 10:
-            avg_volume = float(volume.tail(10).mean())
-            current_volume = float(volume.iloc[-1])
-            if current_volume > avg_volume * 1.5:
-                signals.append("📊 Volume +50%")
+            avg_vol = float(volume.tail(10).mean())
+            curr_vol = float(volume.iloc[-1])
+            diff_pct = ((curr_vol - avg_vol) / avg_vol * 100.0) if avg_vol > 0 else 0.0
+            
+            if curr_vol > avg_vol * 1.5:
+                signals.append(f"📊 Volume: +{diff_pct:.0f}% vs media 10gg")
                 vol_score = 0.80
-            elif current_volume < avg_volume * 0.5:
+            elif curr_vol < avg_vol * 0.5:
+                signals.append(f"📊 Volume: {diff_pct:.0f}% vs media 10gg")
                 vol_score = 0.30
+            else:
+                signals.append(f"📊 Volume: nella media ({diff_pct:+.0f}%)")
+                vol_score = 0.50
 
-        # 5. CHIUSURA VS CHIUSURA PRECEDENTE (PESO 5%)
+        # 6. ZIGZAG (PESO 5%) - Mostra SEMPRE lo stato
+        zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
+        if zz_trend == 1:
+            signals.append("⚡ ZIGZAG: Rialzista")
+            zigzag_score = 1.0
+        elif zz_trend == -1:
+            signals.append("⚡ ZIGZAG: Ribassista")
+            zigzag_score = 0.0
+        else:
+            signals.append("⚡ ZIGZAG: Incertezza")
+            zigzag_score = 0.5
+
+        # 7. CHIUSURA VS PRECEDENTE (PESO 5%)
         if len(close) >= 2:
             last_close = float(close.iloc[-1])
             prev_close = float(close.iloc[-2])
@@ -192,31 +241,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 close_change_score = 0.25
             else:
                 close_change_score = 0.0
-
-        # 6. ZIGZAG (PESO 5%)
-        zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
-        if zz_trend == 1:
-            signals.append("⚡ ZIGZAG: Segmento Rialzista Attivo")
-            zigzag_score = 1.0
-        elif zz_trend == -1:
-            signals.append("⚡ ZIGZAG: Segmento Ribassista Attivo")
-            zigzag_score = 0.0
-
-        # 7. RSI (PESO 5%)
-        if len(close) >= 15:
-            rsi = ta.momentum.rsi(close, window=14)
-            if len(rsi) > 0:
-                rsi_val = float(rsi.iloc[-1])
-                if rsi_val > 70:
-                    signals.append("⚠️ RSI > 70 (IPERCOMPRATO)")
-                    rsi_score = 0.15
-                elif rsi_val < 30:
-                    signals.append("⚠️ RSI < 30 (IPERVENDUTO)")
-                    rsi_score = 0.85
-                elif rsi_val > 60:
-                    rsi_score = 0.65
-                elif rsi_val < 40:
-                    rsi_score = 0.35
 
         # COMBINAZIONE FINALE SCORE
         final_score = (
@@ -303,7 +327,7 @@ def main():
     start_time = time.time()
     try:
         print("=" * 60)
-        print("📊 AGENTE DI TRADING - ANALISI CON NUOVI PESI (TREND 30%, SOGLIA 3%)")
+        print("📊 AGENTE DI TRADING - ANALISI GIORNALIERA COMPLETA")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
