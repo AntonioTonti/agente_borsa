@@ -3,12 +3,13 @@
 Agente di Trading - Analisi Giornaliera
 PESI E SOGLIE AGGIORNATI (TOTALE 100%):
 - Stima Trend 7gg (30%) [Soglia: ±3.0%]
-- EMA10 vs MA31 (30%)
+- EMA10 vs MA31 (25%)
 - Heikin Ashi (20%)
 - Volume (5%)
 - Chiusura vs Chiusura Prec. (5%)
 - ZigZag (5%)
 - RSI 14 (5%)
+- MACD (5%)
 """
 
 import os
@@ -73,7 +74,7 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     """
-    Analisi giornaliera con 7 parametri in ordine sequenziale rigoroso
+    Analisi giornaliera a 8 parametri con l'inclusione del MACD
     """
     signals = []
     
@@ -85,6 +86,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     close_change_score = 0.5
     zigzag_score = 0.5
     rsi_score = 0.5
+    macd_score = 0.5
     
     extra_data = {}
     
@@ -123,7 +125,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             else:
                 trend_score = 0.0
 
-        # 2. EMA10 vs MA31 (PESO 30%)
+        # 2. EMA10 vs MA31 (PESO 25%)
         if len(close) >= 32:
             ema10 = ta.trend.ema_indicator(close, window=10)
             ma31 = ta.trend.sma_indicator(close, window=31)
@@ -244,15 +246,41 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                     else:
                         rsi_score = 0.50
 
-        # COMBINAZIONE FINALE SCORE
+        # 8. MACD 12,26,9 (PESO 5%)
+        if len(close) >= 35:
+            macd_obj = ta.trend.MACD(close=close, window_slow=26, window_fast=12, window_sign=9)
+            macd_line = macd_obj.macd().dropna()
+            signal_line = macd_obj.macd_signal().dropna()
+            
+            if len(macd_line) > 1 and len(signal_line) > 1:
+                m_now, s_now = float(macd_line.iloc[-1]), float(signal_line.iloc[-1])
+                m_prev, s_prev = float(macd_line.iloc[-2]), float(signal_line.iloc[-2])
+                
+                fmt = ".4f" if abs(m_now) < 1.0 else ".2f"
+                
+                if m_now > s_now and m_prev <= s_prev:
+                    signals.append(f"📈 MACD ({m_now:{fmt}}) > Signal ({s_now:{fmt}}) [CROSSOVER UP]")
+                    macd_score = 1.0
+                elif m_now < s_now and m_prev >= s_prev:
+                    signals.append(f"📉 MACD ({m_now:{fmt}}) < Signal ({s_now:{fmt}}) [CROSSOVER DOWN]")
+                    macd_score = 0.0
+                elif m_now > s_now:
+                    signals.append(f"🟢 MACD ({m_now:{fmt}}) sopra Signal ({s_now:{fmt}})")
+                    macd_score = 0.75
+                else:
+                    signals.append(f"🔴 MACD ({m_now:{fmt}}) sotto Signal ({s_now:{fmt}})")
+                    macd_score = 0.25
+
+        # COMBINAZIONE FINALE SCORE (TOTALE 100%)
         final_score = (
             (trend_score * 0.30) +
-            (ema_ma_score * 0.30) +
+            (ema_ma_score * 0.25) +
             (ha_score * 0.20) +
             (vol_score * 0.05) +
             (close_change_score * 0.05) +
             (zigzag_score * 0.05) +
-            (rsi_score * 0.05)
+            (rsi_score * 0.05) +
+            (macd_score * 0.05)
         )
         final_score = max(0.0, min(1.0, final_score))
         
