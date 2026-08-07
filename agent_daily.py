@@ -25,7 +25,7 @@ import numpy as np
 import ta
 from typing import List, Dict, Tuple
 
-# Configurazione
+# Configurazione ambiente
 sys.path.append('.')
 from config import (
     load_titoli_csv, DAILY_PERIOD, DAILY_INTERVAL, DAILY_MIN_POINTS
@@ -76,11 +76,11 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     """
-    Analisi giornaliera a 10 parametri orientata a premiare la forza e la direzionalità del trend.
+    Analisi giornaliera a 10 parametri con focus su forza e direzionalità.
     """
     signals = []
     
-    # Valori predefiniti neutrali
+    # Default neutrali
     trend_score = 0.5
     ema_ma_score = 0.5
     ema_ma_delta_score = 0.5
@@ -95,7 +95,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     extra_data = {}
     
     try:
-        # Download storico di 6 mesi per coprire comodamente la media volumi a 3 mesi (~63 giorni)
         df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True, progress=False)
         
         if df.empty or len(df) < DAILY_MIN_POINTS:
@@ -130,7 +129,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             else:
                 trend_score = 0.0
 
-        # 2. EMA10 vs MA31 - POSIZIONAMENTO E CROSSOVER (PESO 20%)
+        # 2. EMA10 vs MA31 (PESO 20%)
         ema_now = None
         ma_now = None
         if len(close) >= 32:
@@ -149,10 +148,10 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 fmt = ".4f" if ema_now < 1.0 else ".2f"
                 
                 if ema_now > ma_now and ema_prev <= ma_prev:
-                    signals.append(f"📈 EMA10 ({ema_now:{fmt}}) > MA31 ({ma_now:{fmt}}) [CROSSOVER UP]")
+                    signals.append(f"📈 EMA10 ({ema_now:{fmt}}) > MA31 ({ma_now:{fmt}}) (CROSSOVER UP)")
                     ema_ma_score = 1.0
                 elif ma_now > ema_now and ma_prev <= ema_prev:
-                    signals.append(f"📉 MA31 ({ma_now:{fmt}}) > EMA10 ({ema_now:{fmt}}) [CROSSOVER DOWN]")
+                    signals.append(f"📉 MA31 ({ma_now:{fmt}}) > EMA10 ({ema_now:{fmt}}) (CROSSOVER DOWN)")
                     ema_ma_score = 0.0
                 elif ema_now > ma_now:
                     signals.append(f"🟢 EMA10 ({ema_now:{fmt}}) sopra MA31 ({ma_now:{fmt}})")
@@ -161,7 +160,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                     signals.append(f"🔴 MA31 ({ma_now:{fmt}}) sopra EMA10 ({ema_now:{fmt}})")
                     ema_ma_score = 0.25
 
-        # 3. DELTA % EMA10 vs MA31 - DIREZIONALITÀ MEDIE (PESO 15%)
+        # 3. DELTA % EMA10 vs MA31 (PESO 15%)
         if ema_now is not None and ma_now is not None and ma_now > 0:
             delta_pct = ((ema_now - ma_now) / ma_now) * 100.0
             sign = "+" if delta_pct > 0 else ""
@@ -185,7 +184,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 else:
                     ema_ma_delta_score = 0.35
 
-        # 4 & 5. HEIKIN ASHI - STATO (10%) E FORZA/ESTENSIONE CORPO (15%)
+        # 4 & 5. HEIKIN ASHI - STATO (10%) E FORZA (15%)
         ha = calculate_heikin_ashi(df)
         if len(ha) >= 10:
             last_ha_close = float(ha['HA_Close'].iloc[-1])
@@ -195,7 +194,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             
             is_green = last_ha_close > last_ha_open
             
-            # 4. Stato/Colore
+            # 4. Stato
             if is_green:
                 if abs(last_ha_open - last_ha_low) < 1e-6:
                     signals.append("🟢 HEIKIN ASHI: VERDE SENZA OMBRA INF. (Forte rialzo)")
@@ -211,11 +210,10 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                     signals.append("🔴 HEIKIN ASHI: BARRA ROSSA")
                     ha_state_score = 0.25
                     
-            # 5. Forza/Estensione Corpo (Corpo attuale vs Media corpi 10gg)
+            # 5. Forza Corpo
             ha_bodies = (ha['HA_Close'] - ha['HA_Open']).abs()
             curr_body = ha_bodies.iloc[-1]
             avg_body = ha_bodies.tail(10).mean()
-            
             ratio_body = (curr_body / avg_body) if avg_body > 0 else 1.0
             
             if is_green:
@@ -317,10 +315,10 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 fmt = ".4f" if abs(m_now) < 1.0 else ".2f"
                 
                 if m_now > s_now and m_prev <= s_prev:
-                    signals.append(f"📈 MACD ({m_now:{fmt}}) > Signal ({s_now:{fmt}}) [CROSSOVER UP]")
+                    signals.append(f"📈 MACD ({m_now:{fmt}}) > Signal ({s_now:{fmt}}) (CROSSOVER UP)")
                     macd_score = 1.0
                 elif m_now < s_now and m_prev >= s_prev:
-                    signals.append(f"📉 MACD ({m_now:{fmt}}) < Signal ({s_now:{fmt}}) [CROSSOVER DOWN]")
+                    signals.append(f"📉 MACD ({m_now:{fmt}}) < Signal ({s_now:{fmt}}) (CROSSOVER DOWN)")
                     macd_score = 0.0
                 elif m_now > s_now:
                     signals.append(f"🟢 MACD ({m_now:{fmt}}) sopra Signal ({s_now:{fmt}})")
@@ -395,19 +393,51 @@ def create_watchlist_daily_report(results: List[Tuple[str, List[str], float, Dic
     return "\n".join(lines)
 
 def send_telegram_message(token: str, chat_id: str, message: str, use_markdown: bool = True) -> bool:
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+    """
+    Invia un messaggio Telegram dividendolo automaticamente se supera la lunghezza massima.
+    """
+    MAX_LENGTH = 3800  # Soglia di sicurezza sotto il limite Telegram di 4096
+    
+    chunks = []
+    if len(message) > MAX_LENGTH:
+        lines = message.split('\n')
+        current_chunk = []
+        current_length = 0
+        
+        for line in lines:
+            if current_length + len(line) + 1 > MAX_LENGTH:
+                chunks.append('\n'.join(current_chunk))
+                current_chunk = [line]
+                current_length = len(line)
+            else:
+                current_chunk.append(line)
+                current_length += len(line) + 1
+        if current_chunk:
+            chunks.append('\n'.join(current_chunk))
+    else:
+        chunks = [message]
+
+    success = True
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    for chunk in chunks:
         payload = {
             "chat_id": chat_id,
-            "text": message,
+            "text": chunk,
             "parse_mode": "Markdown" if use_markdown else None,
             "disable_web_page_preview": True
         }
-        resp = requests.post(url, json=payload, timeout=15)
-        return resp.status_code == 200
-    except Exception as e:
-        print(f"❌ Errore invio Telegram: {e}")
-        return False
+        try:
+            resp = requests.post(url, json=payload, timeout=15)
+            if resp.status_code != 200:
+                print(f"❌ Errore API Telegram ({resp.status_code}): {resp.text}")
+                success = False
+        except Exception as e:
+            print(f"❌ Errore invio Telegram: {e}")
+            success = False
+        time.sleep(1) # Pausa tra un blocco e l'altro
+        
+    return success
 
 def main():
     start_time = time.time()
@@ -438,14 +468,17 @@ def main():
         
         if token and chat_id:
             if portfolio_results:
+                print("\n📩 Invio report Portafoglio...")
                 send_telegram_message(token, chat_id, create_portfolio_daily_report(portfolio_results, descriptions))
+                time.sleep(2) # Pausa prima dell'invio successivo
             if watchlist_results:
+                print("\n📩 Invio report Watchlist...")
                 send_telegram_message(token, chat_id, create_watchlist_daily_report(watchlist_results, descriptions))
                 
         print(f"\n🏁 Completato in {time.time() - start_time:.1f}s")
         
     except Exception as e:
-        print(f"❌ ERRORE: {e}")
+        print(f"❌ ERRORE GENERALE: {e}")
 
 if __name__ == "__main__":
     main()
