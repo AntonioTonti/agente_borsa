@@ -19,6 +19,7 @@ import requests
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import ta
 from typing import List, Dict, Tuple
 
 # Configurazione
@@ -41,8 +42,8 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
     if len(df) < 20:
         return 0
         
-    highs = df['High'].values
-    lows = df['Low'].values
+    highs = df['High'].squeeze().values
+    lows = df['Low'].squeeze().values
     
     last_pivot_val = highs[0]
     last_pivot_type = 'H'
@@ -88,20 +89,19 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     extra_data = {}
     
     try:
-       
-        # Usa "6mo" (oppure "1y") - "6m" non è una sintassi valida per yfinance
+        # Download con 6 mesi di storico per calcolo stabile EMA/MA
         df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True, progress=False)
         
         if df.empty or len(df) < DAILY_MIN_POINTS:
             return signals, 0.5, extra_data
         
+        # Pulizia MultiIndex delle colonne per compatibilità yfinance recente
         if isinstance(df.columns, pd.MultiIndex):
-            df = df[['Open', 'High', 'Low', 'Close', 'Volume']]
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+            df.columns = df.columns.get_level_values(0)
         
-        close = df['Close']
-        volume = df['Volume']
+        # Estrazione e normalizzazione a 1D
+        close = df['Close'].squeeze()
+        volume = df['Volume'].squeeze()
         
         # 1. STIMA TREND 7 GIORNI (PESO 30% - SOGLIA 3.0%)
         if len(close) >= 10:
@@ -124,7 +124,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         
         # 2. EMA10 vs MA31 (PESO 30%)
         if len(close) >= 32:
-            import ta
             ema10 = ta.trend.ema_indicator(close, window=10)
             ma31 = ta.trend.sma_indicator(close, window=31)
             
@@ -158,13 +157,13 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 signals.append("🟢 HEIKIN ASHI: BARRA VERDE")
                 ha_score = 0.85
                 if last_ha_close > prev_ha_close:
-                    signals.append("   ↑ Rafforzamento: Chiusura > Chiusura precedente")
+                    signals.append("    ↑ Rafforzamento: Chiusura > Chiusura precedente")
                     ha_score = 1.0
             else:
                 signals.append("🔴 HEIKIN ASHI: BARRA ROSSA")
                 ha_score = 0.15
                 if last_ha_close < prev_ha_close:
-                    signals.append("   ↓ Indebolimento: Chiusura < Chiusura precedente")
+                    signals.append("    ↓ Indebolimento: Chiusura < Chiusura precedente")
                     ha_score = 0.0
 
         # 4. VOLUME (PESO 5%)
@@ -205,7 +204,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
 
         # 7. RSI (PESO 5%)
         if len(close) >= 15:
-            import ta
             rsi = ta.momentum.rsi(close, window=14)
             if len(rsi) > 0:
                 rsi_val = float(rsi.iloc[-1])
