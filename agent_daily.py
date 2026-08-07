@@ -88,7 +88,8 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     extra_data = {}
     
     try:
-        df = yf.download(ticker, period=DAILY_PERIOD, interval=DAILY_INTERVAL, progress=False)
+        # Scarica almeno 6 mesi/1 anno per stabilizzare EMA e SMA
+        df = yf.download(ticker, period="6m", interval="1d", auto_adjust=True, progress=False)
         
         if df.empty or len(df) < DAILY_MIN_POINTS:
             return signals, 0.5, extra_data
