@@ -6,10 +6,10 @@ Invio: 12:00 e 17:00 UTC (13:00 e 18:00 IT)
 PESI SCORING AGGIORNATI (TOTALE 100%):
 - Heikin Ashi (25%)
 - EMA10 vs MA31 (25%)
-- Stima Trend 7gg (20%)
-- Volume (10%)
-- Variazione Chiusura Giornaliera (10%)
-- ZigZag (5%)
+- Stima Trend 7gg (25% - Soglia 3.0%)
+- ZigZag (10%)
+- Volume (5%)
+- Variazione Chiusura Giornaliera (5%)
 - RSI (5%)
 """
 
@@ -90,9 +90,9 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     ha_score = 0.5
     ema_ma_score = 0.5
     trend_score = 0.5
+    zigzag_score = 0.5
     vol_score = 0.5
     close_change_score = 0.5
-    zigzag_score = 0.5
     rsi_score = 0.5
     
     extra_data = {}
@@ -112,28 +112,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         volume = df['Volume']
         
         # ================================================================
-        # 1. STIMA TREND 7 GIORNI (PESO 0.20)
-        # ================================================================
-        if len(close) >= 10:
-            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
-            extra_data = {
-                'var_percent': var_percent,
-                'target_price': target_price,
-                'stop_loss': stop_loss
-            }
-            if var_percent > 1.5:
-                trend_score = 1.0
-            elif var_percent > 0.0:
-                trend_score = 0.75
-            elif var_percent == 0.0:
-                trend_score = 0.50
-            elif var_percent > -1.5:
-                trend_score = 0.25
-            else:
-                trend_score = 0.0
-        
-        # ================================================================
-        # 2. HEIKIN ASHI (PESO 0.25)
+        # 1. HEIKIN ASHI (PESO 0.25)
         # ================================================================
         ha = calculate_heikin_ashi(df)
         if len(ha) >= 2:
@@ -153,9 +132,9 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 if last_ha_close < prev_ha_close:
                     signals.append("   ↓ Indebolimento: Chiusura < Chiusura precedente")
                     ha_score = 0.0
-        
+
         # ================================================================
-        # 3. EMA10 vs MA31 (PESO 0.25)
+        # 2. EMA10 vs MA31 (PESO 0.25)
         # ================================================================
         if len(close) >= 32:
             import ta
@@ -182,7 +161,39 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                     ema_ma_score = 0.25
 
         # ================================================================
-        # 4. Volume (PESO 0.10)
+        # 3. STIMA TREND 7 GIORNI (PESO 0.25 - SOGLIA 3.0%)
+        # ================================================================
+        if len(close) >= 10:
+            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
+            extra_data = {
+                'var_percent': var_percent,
+                'target_price': target_price,
+                'stop_loss': stop_loss
+            }
+            if var_percent > 3.0:
+                trend_score = 1.0
+            elif var_percent > 0.0:
+                trend_score = 0.75
+            elif var_percent == 0.0:
+                trend_score = 0.50
+            elif var_percent > -3.0:
+                trend_score = 0.25
+            else:
+                trend_score = 0.0
+
+        # ================================================================
+        # 4. ZIGZAG (PESO 0.10)
+        # ================================================================
+        zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
+        if zz_trend == 1:
+            signals.append("⚡ ZIGZAG: Segmento Rialzista Attivo")
+            zigzag_score = 1.0
+        elif zz_trend == -1:
+            signals.append("⚡ ZIGZAG: Segmento Ribassista Attivo")
+            zigzag_score = 0.0
+
+        # ================================================================
+        # 5. Volume (PESO 0.05)
         # ================================================================
         if len(volume) >= 10:
             avg_volume = float(volume.tail(10).mean())
@@ -194,7 +205,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 vol_score = 0.30
 
         # ================================================================
-        # 5. CHIUSURA VS CHIUSURA PRECEDENTE (PESO 0.10)
+        # 6. CHIUSURA VS CHIUSURA PRECEDENTE (PESO 0.05)
         # ================================================================
         if len(close) >= 2:
             last_close = float(close.iloc[-1])
@@ -211,17 +222,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                 close_change_score = 0.25
             else:
                 close_change_score = 0.0
-
-        # ================================================================
-        # 6. ZIGZAG (PESO 0.05)
-        # ================================================================
-        zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
-        if zz_trend == 1:
-            signals.append("⚡ ZIGZAG: Segmento Rialzista Attivo")
-            zigzag_score = 1.0
-        elif zz_trend == -1:
-            signals.append("⚡ ZIGZAG: Segmento Ribassista Attivo")
-            zigzag_score = 0.0
 
         # ================================================================
         # 7. RSI (PESO 0.05)
@@ -248,10 +248,10 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         final_score = (
             (ha_score * 0.25) +
             (ema_ma_score * 0.25) +
-            (trend_score * 0.20) +
-            (vol_score * 0.10) +
-            (close_change_score * 0.10) +
-            (zigzag_score * 0.05) +
+            (trend_score * 0.25) +
+            (zigzag_score * 0.10) +
+            (vol_score * 0.05) +
+            (close_change_score * 0.05) +
             (rsi_score * 0.05)
         )
         final_score = max(0.0, min(1.0, final_score))
