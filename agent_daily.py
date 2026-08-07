@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Analisi Giornaliera (Focus Direzionalità e Forza)
-PESI E SOGLIE AGGIORNATI (TOTALE 100%):
-1. Stima Trend 7gg (15%) [Soglia: ±3.0%]
-2. EMA10 vs MA31 (20%)
-3. Delta % EMA10 vs MA31 (15%)
-4. Heikin Ashi - Stato/Colore (10%)
-5. Heikin Ashi - Forza/Estensione Corpo (15%)
+PESI E SOGLIE COMPLETI (TOTALE 100%):
+1. EMA10 vs MA31 (20%)
+2. Stima Trend 7gg (15%) [Soglia: ±3.0%]
+3. Delta % EMA10 vs MA31 vs Media 3 Mesi (15%)
+4. Heikin Ashi - Forza/Estensione Corpo vs Media 3 Mesi (15%)
+5. Heikin Ashi - Stato/Colore & Ombre (10%)
 6. Volume vs Media 3 Mesi (5%)
 7. Chiusura vs Chiusura Prec. (5%)
 8. ZigZag (5%)
@@ -76,16 +76,17 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     """
-    Analisi giornaliera a 10 parametri con focus su forza e direzionalità.
+    Analisi giornaliera a 10 parametri con calibrazione su 3 mesi (63 sessioni)
+    e analisi tecnica completa sulle candele Heikin Ashi.
     """
     signals = []
     
     # Default neutrali
-    trend_score = 0.5
     ema_ma_score = 0.5
+    trend_score = 0.5
     ema_ma_delta_score = 0.5
-    ha_state_score = 0.5
     ha_force_score = 0.5
+    ha_state_score = 0.5
     vol_score = 0.5
     close_change_score = 0.5
     zigzag_score = 0.5
@@ -108,30 +109,12 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         close = df['Close'].squeeze()
         volume = df['Volume'].squeeze()
         
-        # 1. STIMA TREND 7 GIORNI (PESO 15%)
-        if len(close) >= 10:
-            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
-            extra_data = {
-                'var_percent': var_percent,
-                'target_price': target_price,
-                'stop_loss': stop_loss
-            }
-            signals.append(format_trend_line(var_percent, target_price, stop_loss))
-            
-            if var_percent > 3.0:
-                trend_score = 1.0
-            elif var_percent > 0.0:
-                trend_score = 0.75
-            elif var_percent == 0.0:
-                trend_score = 0.50
-            elif var_percent > -3.0:
-                trend_score = 0.25
-            else:
-                trend_score = 0.0
-
-        # 2. EMA10 vs MA31 (PESO 20%)
+        # 1. EMA10 vs MA31 (PESO 20%)
         ema_now = None
         ma_now = None
+        ema_series = None
+        ma_series = None
+        
         if len(close) >= 32:
             ema10 = ta.trend.ema_indicator(close, window=10)
             ma31 = ta.trend.sma_indicator(close, window=31)
@@ -140,6 +123,8 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             clean_ma = ma31.dropna()
             
             if len(clean_ema) > 1 and len(clean_ma) > 1:
+                ema_series = clean_ema
+                ma_series = clean_ma
                 ema_now = float(clean_ema.iloc[-1])
                 ma_now = float(clean_ma.iloc[-1])
                 ema_prev = float(clean_ema.iloc[-2])
@@ -160,79 +145,134 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
                     signals.append(f"🔴 MA31 ({ma_now:{fmt}}) sopra EMA10 ({ema_now:{fmt}})")
                     ema_ma_score = 0.25
 
-        # 3. DELTA % EMA10 vs MA31 (PESO 15%)
-        if ema_now is not None and ma_now is not None and ma_now > 0:
-            delta_pct = ((ema_now - ma_now) / ma_now) * 100.0
-            sign = "+" if delta_pct > 0 else ""
+        # 2. STIMA TREND 7 GIORNI (PESO 15%)
+        if len(close) >= 10:
+            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
+            extra_data = {
+                'var_percent': var_percent,
+                'target_price': target_price,
+                'stop_loss': stop_loss
+            }
+            signals.append(format_trend_line(var_percent, target_price, stop_loss))
             
-            signals.append(f"📐 Delta EMA10/MA31: {sign}{delta_pct:.2f}%")
+            if var_percent > 3.0:
+                trend_score = 1.0
+            elif var_percent > 0.0:
+                trend_score = 0.75
+            elif var_percent == 0.0:
+                trend_score = 0.50
+            elif var_percent > -3.0:
+                trend_score = 0.25
+            else:
+                trend_score = 0.0
+
+        # 3. DELTA % EMA10 vs MA31 CALIBRATO SU MEDIA 3 MESI (PESO 15%)
+        if ema_series is not None and ma_series is not None:
+            # Calcolo serie storica del Delta %
+            delta_series = ((ema_series - ma_series) / ma_series) * 100.0
+            curr_delta = float(delta_series.iloc[-1])
             
-            if ema_now > ma_now:
-                if delta_pct >= 3.0:
+            # Media dei valori assoluti dei Delta negli ultimi 3 mesi (63 sessioni)
+            historical_deltas = delta_series.tail(63).abs()
+            avg_delta_3m = float(historical_deltas.mean()) if len(historical_deltas) > 0 else 1.0
+            
+            ratio_delta = curr_delta / avg_delta_3m if avg_delta_3m > 0 else 0.0
+            sign = "+" if curr_delta > 0 else ""
+            
+            signals.append(f"📐 Delta EMA/MA: {sign}{curr_delta:.2f}% ({abs(ratio_delta):.1f}x media 3M: {avg_delta_3m:.2f}%)")
+            
+            if curr_delta > 0:
+                if ratio_delta >= 1.5:
                     ema_ma_delta_score = 1.0
-                elif delta_pct >= 1.5:
+                elif ratio_delta >= 1.0:
                     ema_ma_delta_score = 0.85
-                elif delta_pct >= 0.5:
+                elif ratio_delta >= 0.5:
                     ema_ma_delta_score = 0.70
                 else:
                     ema_ma_delta_score = 0.55
             else:
-                if delta_pct <= -3.0:
+                if ratio_delta <= -1.5:
                     ema_ma_delta_score = 0.0
-                elif delta_pct <= -1.5:
+                elif ratio_delta <= -1.0:
                     ema_ma_delta_score = 0.15
+                elif ratio_delta <= -0.5:
+                    ema_ma_delta_score = 0.30
                 else:
-                    ema_ma_delta_score = 0.35
+                    ema_ma_delta_score = 0.45
 
-        # 4 & 5. HEIKIN ASHI - STATO (10%) E FORZA (15%)
+        # HEIKIN ASHI ANALYSIS (PARAMETRI 4 E 5)
         ha = calculate_heikin_ashi(df)
-        if len(ha) >= 10:
+        if len(ha) >= 63:
             last_ha_close = float(ha['HA_Close'].iloc[-1])
             last_ha_open = float(ha['HA_Open'].iloc[-1])
             last_ha_low = float(ha['HA_Low'].iloc[-1])
             last_ha_high = float(ha['HA_High'].iloc[-1])
             
-            is_green = last_ha_close > last_ha_open
-            
-            # 4. Stato
-            if is_green:
-                if abs(last_ha_open - last_ha_low) < 1e-6:
-                    signals.append("🟢 HEIKIN ASHI: VERDE SENZA OMBRA INF. (Forte rialzo)")
-                    ha_state_score = 1.0
-                else:
-                    signals.append("🟢 HEIKIN ASHI: BARRA VERDE")
-                    ha_state_score = 0.75
-            else:
-                if abs(last_ha_open - last_ha_high) < 1e-6:
-                    signals.append("🔴 HEIKIN ASHI: ROSSA SENZA OMBRA SUP. (Forte ribasso)")
-                    ha_state_score = 0.0
-                else:
-                    signals.append("🔴 HEIKIN ASHI: BARRA ROSSA")
-                    ha_state_score = 0.25
-                    
-            # 5. Forza Corpo
+            # 4. HEIKIN ASHI - FORZA / ESTENSIONE CORPO VS MEDIA 3 MESI (PESO 15%)
             ha_bodies = (ha['HA_Close'] - ha['HA_Open']).abs()
-            curr_body = ha_bodies.iloc[-1]
-            avg_body = ha_bodies.tail(10).mean()
-            ratio_body = (curr_body / avg_body) if avg_body > 0 else 1.0
+            curr_body = float(ha_bodies.iloc[-1])
+            avg_body_3m = float(ha_bodies.tail(63).mean())
+            ratio_body = (curr_body / avg_body_3m) if avg_body_3m > 0 else 1.0
+            
+            is_green = last_ha_close > last_ha_open
             
             if is_green:
                 if ratio_body >= 1.5:
-                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media (Alta estensione)")
+                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media 3M (Alta estensione)")
                     ha_force_score = 1.0
                 elif ratio_body >= 1.0:
-                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media (Moderata)")
-                    ha_force_score = 0.75
+                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media 3M (Sopra la media)")
+                    ha_force_score = 0.80
+                elif ratio_body >= 0.5:
+                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media 3M (Moderata)")
+                    ha_force_score = 0.60
                 else:
-                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media (Corpo ridotto)")
+                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media 3M (Corpo ridotto)")
                     ha_force_score = 0.50
             else:
                 if ratio_body >= 1.5:
-                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media (Forte pressione ribassista)")
+                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media 3M (Forte pressione ribassista)")
                     ha_force_score = 0.0
+                elif ratio_body >= 1.0:
+                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media 3M (Ribasso sostenuto)")
+                    ha_force_score = 0.20
+                elif ratio_body >= 0.5:
+                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media 3M (Ribasso contenuto)")
+                    ha_force_score = 0.40
                 else:
-                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media (Ribasso contenuto)")
-                    ha_force_score = 0.25
+                    signals.append(f"🕯️ Espansione HA: {ratio_body:.1f}x media 3M (Corpo ridotto)")
+                    ha_force_score = 0.50
+
+            # 5. HEIKIN ASHI - STATO / COLORE & OMBRE (ANALISI TECNICA) (PESO 10%)
+            upper_shadow = last_ha_high - max(last_ha_close, last_ha_open)
+            lower_shadow = min(last_ha_close, last_ha_open) - last_ha_low
+            total_range = last_ha_high - last_ha_low
+            
+            # Presenza ombra trascurabile / nulla (soglia rispetto alla chiusura)
+            threshold = last_ha_close * 1e-4
+            has_no_lower_shadow = lower_shadow <= threshold
+            has_no_upper_shadow = upper_shadow <= threshold
+            
+            # Condizione di incertezza (Doji / Spinning Top): corpo piccolo e ombre presenti
+            is_indecision = (curr_body / total_range < 0.25) if total_range > 0 else False
+            
+            if is_indecision:
+                signals.append("⚪ HEIKIN ASHI: DOJI / INCERTEZZA (Ombre presenti, corpo stretto)")
+                ha_state_score = 0.50
+            elif is_green:
+                if has_no_lower_shadow:
+                    signals.append("🟢 HEIKIN ASHI: VERDE FORTE (Senza ombra inferiore)")
+                    ha_state_score = 1.0
+                else:
+                    signals.append("🟢 HEIKIN ASHI: BARRA VERDE (Rialzista con ombra inf.)")
+                    ha_state_score = 0.75
+            else:
+                if has_no_upper_shadow:
+                    signals.append("🔴 HEIKIN ASHI: ROSSA FORTE (Senza ombra superiore)")
+                    ha_state_score = 0.0
+                else:
+                    signals.append("🔴 HEIKIN ASHI: BARRA ROSSA (Ribassista con ombra sup.)")
+                    ha_state_score = 0.25
 
         # 6. VOLUME VS MEDIA 3 MESI (~63 SESSIONI) (PESO 5%)
         if len(volume) >= 63:
@@ -329,11 +369,11 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
 
         # SCORE FINALE BILANCIATO AL 100%
         final_score = (
-            (trend_score * 0.15) +
             (ema_ma_score * 0.20) +
+            (trend_score * 0.15) +
             (ema_ma_delta_score * 0.15) +
-            (ha_state_score * 0.10) +
             (ha_force_score * 0.15) +
+            (ha_state_score * 0.10) +
             (vol_score * 0.05) +
             (close_change_score * 0.05) +
             (zigzag_score * 0.05) +
@@ -470,7 +510,7 @@ def main():
             if portfolio_results:
                 print("\n📩 Invio report Portafoglio...")
                 send_telegram_message(token, chat_id, create_portfolio_daily_report(portfolio_results, descriptions))
-                time.sleep(2) # Pausa prima dell'invio successivo
+                time.sleep(2)
             if watchlist_results:
                 print("\n📩 Invio report Watchlist...")
                 send_telegram_message(token, chat_id, create_watchlist_daily_report(watchlist_results, descriptions))
