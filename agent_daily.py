@@ -2,8 +2,8 @@
 """
 Agente di Trading - Analisi Giornaliera
 PESI E SOGLIE AGGIORNATI (TOTALE 100%):
-- Stima Trend 7gg (30%) [Soglia: ±3.0%]
-- EMA10 vs MA31 (15%) [Logica Invertita: EMA < MA = Rialzista]
+- Stima Trend 7gg (20%) [Soglia: ±3.0%]
+- EMA10 vs MA31 (25%)
 - Differenza % EMA10 vs MA31 (10%)
 - Heikin Ashi (20%)
 - Volume (5%)
@@ -75,14 +75,14 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     """
-    Analisi giornaliera a 9 parametri con logica EMA/MA personalizzata e calcolo della direzionalità delta %
+    Analisi giornaliera a 9 parametri con valutazione della direzionalità (Delta % EMA10/MA31)
     """
     signals = []
     
     # Default neutrali
     trend_score = 0.5
     ema_ma_score = 0.5
-    ema_ma_diff_score = 0.5
+    ema_ma_delta_score = 0.5
     ha_score = 0.5
     vol_score = 0.5
     close_change_score = 0.5
@@ -106,7 +106,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         close = df['Close'].squeeze()
         volume = df['Volume'].squeeze()
         
-        # 1. STIMA TREND 7 GIORNI (PESO 30%)
+        # 1. STIMA TREND 7 GIORNI (PESO 20%)
         if len(close) >= 10:
             var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
             extra_data = {
@@ -127,66 +127,49 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             else:
                 trend_score = 0.0
 
-        # VARIABILI SUPPORTO EMA E MA PER PUNTI 2 E 3
+        # CALCOLO BASE EMA10 ED MA31 (utilizzato per i punti 2 e 3)
         ema_now, ma_now = None, None
         if len(close) >= 32:
-            ema10 = ta.trend.ema_indicator(close, window=10)
-            ma31 = ta.trend.sma_indicator(close, window=31)
+            ema10 = ta.trend.ema_indicator(close, window=10).dropna()
+            ma31 = ta.trend.sma_indicator(close, window=31).dropna()
             
-            clean_ema = ema10.dropna()
-            clean_ma = ma31.dropna()
-            
-            if len(clean_ema) > 1 and len(clean_ma) > 1:
-                ema_now = float(clean_ema.iloc[-1])
-                ma_now = float(clean_ma.iloc[-1])
-                ema_prev = float(clean_ema.iloc[-2])
-                ma_prev = float(clean_ma.iloc[-2])
-                
+            if len(ema10) > 1 and len(ma31) > 1:
+                ema_now, ma_now = float(ema10.iloc[-1]), float(ma31.iloc[-1])
+                ema_prev, ma_prev = float(ema10.iloc[-2]), float(ma31.iloc[-2])
                 fmt = ".4f" if ema_now < 1.0 else ".2f"
 
-                # 2. EMA10 vs MA31 (PESO 15%) - LOGICA INVERTITA
-                # EMA < MA = Rialzista | EMA > MA = Ribassista
-                if ema_now < ma_now and ema_prev >= ma_prev:
-                    signals.append(f"📈 EMA10 ({ema_now:{fmt}}) < MA31 ({ma_now:{fmt}}) [CROSSOVER RIALZISTA]")
+                # 2. EMA10 vs MA31 - POSIZIONE (PESO 25%)
+                if ema_now > ma_now and ema_prev <= ma_prev:
+                    signals.append(f"📈 EMA10 ({ema_now:{fmt}}) > MA31 ({ma_now:{fmt}}) [CROSSOVER UP]")
                     ema_ma_score = 1.0
-                elif ema_now > ma_now and ema_prev <= ma_prev:
-                    signals.append(f"📉 EMA10 ({ema_now:{fmt}}) > MA31 ({ma_now:{fmt}}) [CROSSOVER RIBASSISTA]")
+                elif ma_now > ema_now and ma_prev <= ema_prev:
+                    signals.append(f"📉 MA31 ({ma_now:{fmt}}) > EMA10 ({ema_now:{fmt}}) [CROSSOVER DOWN]")
                     ema_ma_score = 0.0
-                elif ema_now < ma_now:
-                    signals.append(f"🟢 EMA10 ({ema_now:{fmt}}) sotto MA31 ({ma_now:{fmt}})")
+                elif ema_now > ma_now:
+                    signals.append(f"🟢 EMA10 ({ema_now:{fmt}}) sopra MA31 ({ma_now:{fmt}})")
                     ema_ma_score = 0.75
                 else:
-                    signals.append(f"🔴 EMA10 ({ema_now:{fmt}}) sopra MA31 ({ma_now:{fmt}})")
+                    signals.append(f"🔴 MA31 ({ma_now:{fmt}}) sopra EMA10 ({ema_now:{fmt}})")
                     ema_ma_score = 0.25
 
-                # 3. DIFFERENZA % EMA10 vs MA31 (PESO 10%) - DIREZIONALITÀ
-                # Delta % positivo indica estensione. Se EMA < MA (Rialzista), maggiore il delta, maggiore il rialzo.
-                diff_pct = ((ema_now - ma_now) / ma_now) * 100.0
-                abs_diff = abs(diff_pct)
+                # 3. DIFFERENZA % EMA10 vs MA31 - DIREZIONALITÀ (PESO 10%)
+                delta_pct = ((ema_now - ma_now) / ma_now) * 100.0
+                signals.append(f"📏 Delta EMA10/MA31: {delta_pct:+.2f}%")
                 
-                if diff_pct < 0:  # EMA sotto MA (Rialzista)
-                    signals.append(f"📐 Delta EMA/MA: -{abs_diff:.2f}% (Forza Rialzista)")
-                    if abs_diff >= 2.0:
-                        ema_ma_diff_score = 1.0
-                    elif abs_diff >= 1.0:
-                        ema_ma_diff_score = 0.85
-                    elif abs_diff >= 0.3:
-                        ema_ma_diff_score = 0.70
-                    else:
-                        ema_ma_diff_score = 0.55
-                elif diff_pct > 0:  # EMA sopra MA (Ribassista)
-                    signals.append(f"📐 Delta EMA/MA: +{abs_diff:.2f}% (Forza Ribassista)")
-                    if abs_diff >= 2.0:
-                        ema_ma_diff_score = 0.0
-                    elif abs_diff >= 1.0:
-                        ema_ma_diff_score = 0.15
-                    elif abs_diff >= 0.3:
-                        ema_ma_diff_score = 0.30
-                    else:
-                        ema_ma_diff_score = 0.45
+                if delta_pct >= 5.0:
+                    ema_ma_delta_score = 1.0
+                elif delta_pct >= 2.0:
+                    ema_ma_delta_score = 0.85
+                elif delta_pct > 0.0:
+                    ema_ma_delta_score = 0.65
+                elif delta_pct == 0.0:
+                    ema_ma_delta_score = 0.50
+                elif delta_pct > -2.0:
+                    ema_ma_delta_score = 0.35
+                elif delta_pct > -5.0:
+                    ema_ma_delta_score = 0.15
                 else:
-                    signals.append("📐 Delta EMA/MA: 0.00% (Neutro)")
-                    ema_ma_diff_score = 0.50
+                    ema_ma_delta_score = 0.0
 
         # 4. HEIKIN ASHI (PESO 20%)
         ha = calculate_heikin_ashi(df)
@@ -216,16 +199,16 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         if len(volume) >= 10:
             avg_vol = float(volume.tail(10).mean())
             curr_vol = float(volume.iloc[-1])
-            diff_vol = ((curr_vol - avg_vol) / avg_vol * 100.0) if avg_vol > 0 else 0.0
+            diff_pct = ((curr_vol - avg_vol) / avg_vol * 100.0) if avg_vol > 0 else 0.0
             
             if curr_vol > avg_vol * 1.5:
-                signals.append(f"📊 Volume: +{diff_vol:.0f}% vs media 10gg")
+                signals.append(f"📊 Volume: +{diff_pct:.0f}% vs media 10gg")
                 vol_score = 0.80
             elif curr_vol < avg_vol * 0.5:
-                signals.append(f"📊 Volume: {diff_vol:.0f}% vs media 10gg")
+                signals.append(f"📊 Volume: {diff_pct:.0f}% vs media 10gg")
                 vol_score = 0.30
             else:
-                signals.append(f"📊 Volume: nella media ({diff_vol:+.0f}%)")
+                signals.append(f"📊 Volume: nella media ({diff_pct:+.0f}%)")
                 vol_score = 0.50
 
         # 6. CHIUSURA VS CHIUSURA PRECEDENTE (PESO 5%)
@@ -307,9 +290,9 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
 
         # COMBINAZIONE FINALE SCORE (TOTALE 100%)
         final_score = (
-            (trend_score * 0.30) +
-            (ema_ma_score * 0.15) +
-            (ema_ma_diff_score * 0.10) +
+            (trend_score * 0.20) +
+            (ema_ma_score * 0.25) +
+            (ema_ma_delta_score * 0.10) +
             (ha_score * 0.20) +
             (vol_score * 0.05) +
             (close_change_score * 0.05) +
