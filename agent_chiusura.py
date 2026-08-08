@@ -70,7 +70,7 @@ def build_telegram_section(title: str, items: list, prev_state: dict, current_st
 
         lines.append(f"{icon_v} [{t} - {d}]({url}) *[{sign_v}{v:.2f}%]* | *Score: {s:.3f}*")
         lines.append(f"📊 Delta: Var *{sign_dv}{d_var:.2f}%* | Score *{sign_ds}{d_score:.3f}*")
-        lines.append("⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
+        lines.append("⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
         
     return "\n".join(lines)
 
