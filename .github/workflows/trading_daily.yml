@@ -2,10 +2,12 @@ name: Daily Trading Analysis
 
 on:
   schedule:
-    # 12:00 in Italia (10:00 UTC)
-    - cron: '0 10 * * 1-5'
-    # 17:30 in Italia (15:30 UTC)
-    - cron: '30 15 * * 1-5'
+    # ~12:00 Italia (CET = UTC+1, CEST = UTC+2)
+    # Impostato alle 10:07 UTC per evitare i picchi del minuto :00
+    - cron: '7 10 * * 1-5'
+    # ~17:30 Italia
+    # Impostato alle 15:37 UTC per evitare i picchi del minuto :30
+    - cron: '37 15 * * 1-5'
   workflow_dispatch:
 
 jobs:
@@ -16,7 +18,7 @@ jobs:
         uses: actions/checkout@v4
         
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           
