@@ -2,8 +2,9 @@ name: Weekly Trading Analysis
 
 on:
   schedule:
-    - cron: '0 18 * * 5'
-      timezone: "Europe/Rome"
+    # ~18:00 Italia di venerdì (16:00 UTC con ora legale CEST / 17:00 UTC con ora solare CET)
+    # Impostato alle 16:12 UTC di venerdì
+    - cron: '12 16 * * 5'
   workflow_dispatch:
 
 jobs:
@@ -12,13 +13,24 @@ jobs:
     steps:
       - name: Checkout codice
         uses: actions/checkout@v4
+
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+
+      - name: Cache dipendenze
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Installa dipendenze
         run: |
           pip install yfinance ta numpy pandas requests
+
       - name: Esegui analisi settimanale
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
