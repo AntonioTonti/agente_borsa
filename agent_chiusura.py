@@ -158,8 +158,8 @@ def analyze_weekly_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
         return signals, 0.5, extra_data
 
 
-def create_weekly_report_section(title: str, results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict, base_url: str = "https://tuosito.com/ticker/") -> str:
-    """Crea la lista sintetica del report settimanale con link Markdown."""
+def create_weekly_report_section(title: str, results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+    """Crea la lista sintetica del report settimanale con link HTML GitHub Pages."""
     if not results:
         return f"{title}\nNessun dato disponibile."
     
@@ -172,10 +172,9 @@ def create_weekly_report_section(title: str, results: List[Tuple[str, List[str],
         var_pct = extra_data.get('weekly_var_pct', 0.0)
         sign = "+" if var_pct > 0 else ""
         
-        # Costruzione URL cliccabile (es. https://tuosito.com/ticker/REC.MI)
-        url = f"{base_url}{ticker}"
+        # Link GitHub Pages per le analisi di Chiusura
+        url = f"https://antoniotonti.github.io/agente_borsa/chiusura/{ticker}.html"
         
-        # Formato con Link: 🟢 [REC.MI](URL) - Recordati +1.14% (score: 0.843)
         line = f"{bullet} [{ticker}]({url}) - {desc} {sign}{var_pct:.2f}% (score: {score:.3f})"
         lines.append(line)
         
