@@ -4,7 +4,8 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from analysis_utils import calculate_heikin_ashi, ta
+import ta
+from analysis_utils import calculate_heikin_ashi
 
 BASE_DOCS_DIR = "docs"
 
@@ -16,12 +17,16 @@ def generate_web_page(ticker: str, desc: str, agent_type: str, df: pd.DataFrame,
 
     # Dati da yfinance per Fondamentali & Analisti
     ticker_obj = yf.Ticker(ticker)
-    info = ticker_obj.info or {}
+    info = {}
+    try:
+        info = ticker_obj.info or {}
+    except Exception:
+        pass
     
     target_mean = info.get("targetMeanPrice", "N/D")
     target_high = info.get("targetHighPrice", "N/D")
     target_low = info.get("targetLowPrice", "N/D")
-    rec_key = info.get("recommendationKey", "N/D").upper()
+    rec_key = info.get("recommendationKey", "N/D").upper() if info.get("recommendationKey") else "N/D"
     pe_ratio = info.get("trailingPE", "N/D")
     market_cap = info.get("marketCap", "N/D")
     
