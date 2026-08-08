@@ -88,7 +88,7 @@ def build_telegram_section(title: str, items: list, prev_state: dict, current_st
 
         line1 = f"{icon_v} [{t} - {d}]({url}) *[{sign_v}{v:.2f}%]* | *Score: {s:.3f}*"
         line2 = f"📊 Delta: Var *{sign_dv}{d_var:.2f}%* | Score *{sign_ds}{d_score:.3f}*"
-        line3 = "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
+        line3 = "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
         
         lines.extend([line1, line2, line3])
         
