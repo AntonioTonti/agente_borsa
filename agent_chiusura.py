@@ -3,10 +3,11 @@ import os, sys
 import requests
 import yfinance as yf
 import pandas as pd
+import ta
 
 sys.path.append('.')
 from config import load_titoli_csv
-from analysis_utils import calculate_heikin_ashi, calculate_trend_estimate, format_trend_line, ta
+from analysis_utils import calculate_heikin_ashi, calculate_trend_estimate, format_trend_line
 from state_manager import load_previous_state, save_current_state, calculate_deltas
 from web_generator import generate_web_page
 
