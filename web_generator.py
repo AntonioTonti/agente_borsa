@@ -15,6 +15,9 @@ def generate_web_page(ticker: str, desc: str, agent_type: str, df: pd.DataFrame,
     os.makedirs(out_dir, exist_ok=True)
     file_path = os.path.join(out_dir, f"{ticker}.html")
 
+    # RESTITUISCI L'URL PUBBLICO (senza 'docs/' nel percorso web)
+    return f"https://antoniotonti.github.io/agente_borsa/{agent_dir}/{file_name}"
+    
     # Dati da yfinance per Fondamentali & Analisti
     ticker_obj = yf.Ticker(ticker)
     info = {}
