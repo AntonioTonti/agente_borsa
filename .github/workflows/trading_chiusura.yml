@@ -2,9 +2,11 @@ name: Trading Chiusura
 
 on:
   schedule:
-    # Esegue alle 17:00 UTC (18:00 IT) dal lunedì al venerdì
     - cron: '0 17 * * 1-5'
-  workflow_dispatch: # Permette l'esecuzione manuale da scheda Actions
+  workflow_dispatch:
+
+permissions:
+  contents: write  # <--- AGGIUNTA QUESTA RIGA
 
 jobs:
   run-chiusura:
