@@ -3,17 +3,18 @@ import os, sys, time
 from datetime import datetime
 import requests
 import yfinance as yf
+import pandas as pd
+import ta
 
 sys.path.append('.')
 from config import load_titoli_csv
-from analysis_utils import calculate_heikin_ashi, get_bullet, calculate_trend_estimate, format_trend_line, ta
+from analysis_utils import calculate_heikin_ashi, get_bullet, calculate_trend_estimate, format_trend_line
 from state_manager import load_previous_state, save_current_state, calculate_deltas
 from web_generator import generate_web_page
 
 PERIOD = "1mo"
 INTERVAL = "1h"
 MIN_POINTS = 20
-GITHUB_USER_BASE = "https://antoniotonti.github.io/agente_borsa/flash"
 
 def analyze_ticker(ticker: str, desc: str):
     df = yf.download(ticker, period=PERIOD, interval=INTERVAL, progress=False)
@@ -85,7 +86,6 @@ def build_telegram_section(title: str, items: list, prev_state: dict, current_st
         sign_dv = "+" if d_var >= 0 else ""
         sign_ds = "+" if d_score >= 0 else ""
 
-        # Formattazione 3 Righe
         line1 = f"{icon_v} [{t} - {d}]({url}) *[{sign_v}{v:.2f}%]* | *Score: {s:.3f}*"
         line2 = f"📊 Delta: Var *{sign_dv}{d_var:.2f}%* | Score *{sign_ds}{d_score:.3f}*"
         line3 = "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯"
@@ -102,7 +102,6 @@ def main():
     p_items = [res for t in portfolio if (res := analyze_ticker(t, descriptions.get(t, t)))]
     w_items = [res for t in watchlist if (res := analyze_ticker(t, descriptions.get(t, t)))]
 
-    # Ordina per score
     p_items.sort(key=lambda x: x['score'], reverse=True)
     w_items.sort(key=lambda x: x['score'], reverse=True)
 
