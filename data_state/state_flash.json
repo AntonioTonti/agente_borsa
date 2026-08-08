@@ -1,0 +1,58 @@
+{
+  "AMP.MI": {
+    "var_pct": 0.13,
+    "score": 0.7
+  },
+  "ZV.MI": {
+    "var_pct": -0.28,
+    "score": 0.7
+  },
+  "TSL.MI": {
+    "var_pct": 0.41,
+    "score": 0.7
+  },
+  "CPR.MI": {
+    "var_pct": -0.1,
+    "score": 0.7
+  },
+  "FCT.MI": {
+    "var_pct": 0.31,
+    "score": 0.7
+  },
+  "PIRC.MI": {
+    "var_pct": -0.15,
+    "score": 0.7
+  },
+  "NEXI.MI": {
+    "var_pct": -0.21,
+    "score": 0.3
+  },
+  "BSS.MI": {
+    "var_pct": -0.39,
+    "score": 0.3
+  },
+  "REC.MI": {
+    "var_pct": -0.38,
+    "score": 0.3
+  },
+  "PIA.MI": {
+    "var_pct": 0.25,
+    "score": 0.3
+  },
+  "STM": {
+    "var_pct": 0.12,
+    "score": 0.7
+  },
+  "SPM.MI": {
+    "var_pct": 0.3,
+    "score": 0.7
+  },
+  "FR0010446666": {
+    "var_pct": 0.22,
+    "score": 0.7
+  },
+  "SES.MI": {
+    "var_pct": 0.1,
+    "score": 0.3
+  }
+}
