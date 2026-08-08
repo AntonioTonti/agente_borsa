@@ -1,0 +1,39 @@
+name: Agente FLASH (Orario)
+
+on:
+  schedule:
+    # Esegue dal lunedì al venerdì, ogni ora dalle 07:00 alle 17:00 UTC (08:00 - 18:00 italiane)
+    - cron: '0 7-17 * * 1-5'
+  workflow_dispatch: # Permette il lancio manuale da GitHub Actions
+
+jobs:
+  run-flash:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configura Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Installa dipendenze
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install plotly yfinance ta requests pandas numpy
+
+      - name: Esegui Agente FLASH
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python agent_flash.py
+
+      - name: Salva modifiche (Stato e Pagine Web)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/ data_state/
+          git commit -m "Auto-update FLASH: pagine web e stato" || exit 0
+          git push
