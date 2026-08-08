@@ -13,11 +13,10 @@ def generate_web_page(ticker: str, desc: str, agent_type: str, df: pd.DataFrame,
     agent_dir = agent_type.lower()
     out_dir = os.path.join(BASE_DOCS_DIR, agent_dir)
     os.makedirs(out_dir, exist_ok=True)
-    file_path = os.path.join(out_dir, f"{ticker}.html")
-
-    # RESTITUISCI L'URL PUBBLICO (senza 'docs/' nel percorso web)
-    return f"https://antoniotonti.github.io/agente_borsa/{agent_dir}/{file_name}"
     
+    file_name = f"{ticker}.html"
+    file_path = os.path.join(out_dir, file_name)
+
     # Dati da yfinance per Fondamentali & Analisti
     ticker_obj = yf.Ticker(ticker)
     info = {}
@@ -107,4 +106,4 @@ def generate_web_page(ticker: str, desc: str, agent_type: str, df: pd.DataFrame,
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(html_content)
 
-    return f"https://antoniotonti.github.io/agente_borsa/{agent_dir}/{ticker}.html"
+    return f"https://antoniotonti.github.io/agente_borsa/{agent_dir}/{file_name}"
