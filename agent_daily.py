@@ -399,40 +399,26 @@ def format_signals_by_weight(signals: List[str]) -> List[str]:
     sorted_signals = sorted(signals, key=get_priority)
     return [f"  {sig.strip()}" for sig in sorted_signals if sig.strip()]
 
-def create_daily_report_section(title: str, results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+def create_daily_report_section(title: str, results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict, base_url: str = "https://tuosito.com/ticker/") -> str:
+    """Crea la lista sintetica del report giornaliero con link Markdown."""
     if not results:
-        return f"{title} - Nessun segnale oggi"
+        return f"{title}\nNessun dato disponibile."
     
     sorted_results = sorted(results, key=lambda x: x[2], reverse=True)
-    lines = [f"{title}"]
+    lines = [f"{title}\n"]
     
-    for ticker, signals, score, extra_data in sorted_results:
+    for ticker, _, score, extra_data in sorted_results:
         desc = descriptions.get(ticker, ticker)
         bullet = get_bullet(score)
-        
-        var_pct = 0.0
-        for sig in signals:
-            if "Chiusura vs Prec:" in sig:
-                try:
-                    var_str = sig.split("Chiusura vs Prec:")[1].replace("%", "").strip()
-                    var_pct = float(var_str)
-                except ValueError:
-                    pass
-                break
-        
-        change_icon = "🟢" if var_pct >= 0 else "🔴"
+        var_pct = extra_data.get('daily_var_pct', 0.0)
         sign = "+" if var_pct > 0 else ""
         
-        header_line = f"\n*{ticker} - {desc} [{change_icon} {sign}{var_pct:.2f}%]* {bullet} (*score: {score:.3f}*)"
-        lines.append(header_line)
+        # Costruzione URL cliccabile (es. https://tuosito.com/ticker/REC.MI)
+        url = f"{base_url}{ticker}"
         
-        if signals:
-            formatted_signals = format_signals_by_weight(signals)
-            lines.extend(formatted_signals)
-        else:
-            lines.append("  📭 Nessun segnale rilevato")
-            
-        lines.append("⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯")
+        # Formato con Link: 🟢 [REC.MI](URL) - Recordati +1.14% (score: 0.843)
+        line = f"{bullet} [{ticker}]({url}) - {desc} {sign}{var_pct:.2f}% (score: {score:.3f})"
+        lines.append(line)
         
     return "\n".join(lines)
 
