@@ -225,6 +225,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
 
 
 def create_daily_report_section(title: str, results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+    """Crea la lista sintetica del report giornaliero con link HTML GitHub Pages."""
     if not results:
         return f"{title}\nNessun dato disponibile."
     
@@ -237,7 +238,10 @@ def create_daily_report_section(title: str, results: List[Tuple[str, List[str], 
         var_pct = extra_data.get('daily_var_pct', 0.0)
         sign = "+" if var_pct > 0 else ""
         
-        line = f"{bullet} {ticker} - {desc} {sign}{var_pct:.2f}% (score: {score:.3f})"
+        # Link GitHub Pages per le analisi Flash
+        url = f"https://antoniotonti.github.io/agente_borsa/flash/{ticker}.html"
+        
+        line = f"{bullet} [{ticker}]({url}) - {desc} {sign}{var_pct:.2f}% (score: {score:.3f})"
         lines.append(line)
         
     return "\n".join(lines)
