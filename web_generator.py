@@ -17,6 +17,10 @@ def generate_web_page(ticker: str, desc: str, agent_type: str, df: pd.DataFrame,
     file_name = f"{ticker}.html"
     file_path = os.path.join(out_dir, file_name)
 
+    # Normalizza le colonne in caso di MultiIndex
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
     # Dati da yfinance per Fondamentali & Analisti
     ticker_obj = yf.Ticker(ticker)
     info = {}
@@ -66,7 +70,7 @@ def generate_web_page(ticker: str, desc: str, agent_type: str, df: pd.DataFrame,
     fig.update_layout(title=f"{ticker} - {desc} ({agent_type.upper()})", template="plotly_dark", height=700, xaxis_rangeslider_visible=False)
     chart_html = fig.to_html(include_plotlyjs='cdn', full_html=False)
 
-    signals_html = "".join([f"<li>{s}</li>" for s in signals])
+    signals_html = "".join([f"<li>{s}</li>" for s in signals]) if signals else "<li>Nessun segnale rilevato.</li>"
 
     # Template HTML con Bootstrap Dark
     html_content = f"""<!DOCTYPE html>
