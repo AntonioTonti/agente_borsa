@@ -26,24 +26,39 @@ from analysis_utils import (
 )
 from web_generator import generate_web_page
 
+# Crea una sessione con User-Agent per bypassare i blocchi IP di GitHub Actions
+session = requests.Session()
+session.headers.update({
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+})
+
 
 def fetch_ticker_data(ticker: str) -> Optional[pd.DataFrame]:
-    """Scarica i dati usando yf.Ticker per evitare problemi di MultiIndex."""
+    """Scarica i dati storici bypassando i blocchi IP di Yahoo Finance."""
     try:
-        t = yf.Ticker(ticker)
+        # Usa Ticker con la sessione personalizzata
+        t = yf.Ticker(ticker, session=session)
         df = t.history(period="6mo", interval="1d", auto_adjust=True)
         
         if df is None or df.empty:
+            # Secondo tentativo con download diretto
+            df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True, progress=False, session=session)
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        if df is None or df.empty:
+            print(f"❌ [DOWNLOAD FAILED] {ticker}: Risposta vuota da Yahoo Finance.")
             return None
 
-        # Pulisce i dati e verifica i punti minimi
         df = df.dropna(subset=['Close'])
         if len(df) < DAILY_MIN_POINTS:
+            print(f"⚠️ [INSUFFICIENT DATA] {ticker}: Trovati solo {len(df)} punti (minimo {DAILY_MIN_POINTS}).")
             return None
             
         return df
     except Exception as e:
-        print(f"⚠️ Errore download {ticker}: {e}")
+        print(f"❌ [ERROR] {ticker}: {e}")
         return None
 
 
@@ -95,7 +110,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
 
     df = fetch_ticker_data(ticker)
     if df is None:
-        print(f"❌ Impossibile analizzare {ticker}: Dati insufficienti o ticker errato.")
         return signals, 0.5, extra_data, None
 
     try:
