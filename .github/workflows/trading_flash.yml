@@ -2,11 +2,12 @@ name: Trading Flash (Orario)
 
 on:
   schedule:
-    - cron: '0 7-17 * * 1-5'
+    # Ogni ora dalle 07:07 alle 17:07 UTC
+    - cron: '7 7-17 * * 1-5'
   workflow_dispatch:
 
 permissions:
-  contents: write  # <--- AGGIUNTA QUESTA RIGA
+  contents: write
 
 jobs:
   run-flash:
@@ -30,7 +31,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python agent_flash.py
+        run: python agente_giornaliero.py
 
       - name: Salva modifiche pagine web e stato
         run: |
