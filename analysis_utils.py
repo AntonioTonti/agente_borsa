@@ -15,6 +15,27 @@ def get_bullet(score: float) -> str:
         return "🔴"
 
 
+def calculate_trend_estimate(df: pd.DataFrame) -> dict:
+    """Calcola una stima del trend, target e stop loss."""
+    if df.empty or len(df) < 14:
+        return {"trend": "N/A", "target": 0.0, "stop_loss": 0.0}
+    
+    close_val = df['Close'].iloc[-1]
+    atr = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14).iloc[-1]
+    
+    target_price = close_val + (1.5 * atr)
+    stop_loss_price = close_val - (1.0 * atr)
+    
+    ema10 = ta.trend.ema_indicator(df['Close'], window=10).iloc[-1] if len(df) >= 10 else close_val
+    trend = "Rialzista" if close_val >= ema10 else "Ribassista"
+    
+    return {
+        "trend": trend,
+        "target": target_price,
+        "stop_loss": stop_loss_price
+    }
+
+
 def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     """Calcola le candele Heikin Ashi."""
     ha_df = df.copy()
@@ -98,32 +119,23 @@ def analyze_ticker(df: pd.DataFrame, ticker: str, description: str = "") -> dict
     zigzag_status = "Rialzista" if close_val >= ema10_val else "Ribassista"
     
     # Target e Stop Loss
-    atr = ta.volatility.average_true_range(df['High'], df['Low'], df['Close'], window=14).iloc[-1]
-    target_price = close_val + (1.5 * atr)
-    stop_loss_price = close_val - (1.0 * atr)
+    trend_data = calculate_trend_estimate(df)
+    target_price = trend_data["target"]
+    stop_loss_price = trend_data["stop_loss"]
     
     # Calcolo Score (0.0 - 1.0)
     score_components = []
     
-    # 1. EMA vs MA (30%)
     if ema10_val > ma31_val:
         score_components.append(0.30)
-    
-    # 2. Heikin Ashi Verde (25%)
     if is_ha_green:
         score_components.append(0.25)
-        
-    # 3. MACD > Signal (20%)
     if macd_val > macd_sig_val:
         score_components.append(0.20)
-        
-    # 4. RSI (15%)
     if 45 <= rsi_val <= 65:
         score_components.append(0.15)
     elif 35 <= rsi_val < 45 or 65 < rsi_val <= 70:
         score_components.append(0.08)
-        
-    # 5. Volumi sopra media (10%)
     if vol_diff_pct > 0:
         score_components.append(0.10)
         
