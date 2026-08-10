@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Analisi Giornaliera (FLASH)
-Format Telegram: Riga singola per ticker con Delta % giornaliera e Score al 100%.
+Format Telegram: Riga singola per ticker con Delta % giornaliera e Score.
 """
 
 import os
@@ -28,29 +28,23 @@ from web_generator import generate_web_page
 
 
 def fetch_ticker_data(ticker: str) -> Optional[pd.DataFrame]:
-    """Scarica i dati storici in modo robusto con fallback su yf.Ticker."""
-    df = None
+    """Scarica i dati usando yf.Ticker per evitare problemi di MultiIndex."""
     try:
-        df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-    except Exception:
-        df = None
-
-    if df is None or df.empty or len(df) < DAILY_MIN_POINTS:
-        try:
-            t = yf.Ticker(ticker)
-            df = t.history(period="6mo", interval="1d", auto_adjust=True)
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-        except Exception:
+        t = yf.Ticker(ticker)
+        df = t.history(period="6mo", interval="1d", auto_adjust=True)
+        
+        if df is None or df.empty:
             return None
 
-    if df is None or df.empty:
+        # Pulisce i dati e verifica i punti minimi
+        df = df.dropna(subset=['Close'])
+        if len(df) < DAILY_MIN_POINTS:
+            return None
+            
+        return df
+    except Exception as e:
+        print(f"⚠️ Errore download {ticker}: {e}")
         return None
-
-    df = df.dropna(subset=['Close'])
-    return df if len(df) >= DAILY_MIN_POINTS else None
 
 
 def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
@@ -86,7 +80,7 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[pd.DataFrame]]:
     signals = []
-    extra_data = {}
+    extra_data = {'daily_var_pct': 0.0}
     
     ema_ma_score = 0.5
     trend_score = 0.5
@@ -99,11 +93,12 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
     rsi_score = 0.5
     macd_score = 0.5
 
-    try:
-        df = fetch_ticker_data(ticker)
-        if df is None:
-            return signals, 0.5, extra_data, None
+    df = fetch_ticker_data(ticker)
+    if df is None:
+        print(f"❌ Impossibile analizzare {ticker}: Dati insufficienti o ticker errato.")
+        return signals, 0.5, extra_data, None
 
+    try:
         close = df['Close'].squeeze()
         volume = df['Volume'].squeeze()
 
@@ -268,7 +263,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
         return signals, round(max(0.0, min(1.0, final_score)), 3), extra_data, df
 
     except Exception as e:
-        print(f"❌ {ticker}: {e}")
+        print(f"❌ Errore durante l'analisi di {ticker}: {e}")
         return signals, 0.5, extra_data, None
 
 
