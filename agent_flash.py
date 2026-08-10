@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Analisi Giornaliera (FLASH)
-Format Telegram: Riga singola per ticker con Delta % giornaliera e Score.
+Format Telegram: Riga singola per ticker con Delta % giornaliera e Score al 100%.
 """
 
 import os
@@ -30,8 +30,8 @@ from web_generator import generate_web_page
 def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
     if len(df) < 20:
         return 0
-    highs = df['High'].squeeze().values
-    lows = df['Low'].squeeze().values
+    highs = df['High'].values
+    lows = df['Low'].values
     last_pivot_val = highs[0]
     last_pivot_type = 'H'
     trends = []
@@ -60,7 +60,7 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
 
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[pd.DataFrame]]:
     signals = []
-    extra_data = {}
+    extra_data = {'daily_var_pct': 0.0}
     
     ema_ma_score = 0.5
     trend_score = 0.5
@@ -74,24 +74,19 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
     macd_score = 0.5
 
     try:
-        # Metodo di download originale (di ieri)
-        df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True, progress=False)
+        # Download tramite Ticker.history per evitare problemi di MultiIndex di yf.download
+        tk = yf.Ticker(ticker)
+        df = tk.history(period="6mo", interval="1d", auto_adjust=True)
         
-        if df.empty:
-            print(f"⚠️ {ticker}: Dati vuoti da Yahoo Finance.")
-            return signals, 0.5, extra_data, None
-            
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-            
-        df = df.dropna()
-        
-        if len(df) < DAILY_MIN_POINTS:
-            print(f"⚠️ {ticker}: Punti insufficienti ({len(df)} < {DAILY_MIN_POINTS}).")
+        if df.empty or len(df) < DAILY_MIN_POINTS:
+            print(f"⚠️ {ticker}: Dati vuoti o insufficienti ({len(df)} righe).")
             return signals, 0.5, extra_data, None
 
-        close = df['Close'].squeeze()
-        volume = df['Volume'].squeeze()
+        # Garanzia pulizia colonne
+        df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+
+        close = df['Close']
+        volume = df['Volume']
 
         # 1. EMA10 vs MA31 (18%)
         clean_ema, clean_ma = None, None
@@ -228,7 +223,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
         return signals, round(max(0.0, min(1.0, final_score)), 3), extra_data, df
 
     except Exception as e:
-        print(f"❌ {ticker}: {e}")
+        print(f"❌ Errore durante l'analisi di {ticker}: {e}")
         return signals, 0.5, extra_data, None
 
 
@@ -236,6 +231,7 @@ def create_daily_report_section(title: str, results: List[Tuple[str, List[str], 
     if not results:
         return f"{title}\nNessun dato disponibile."
     
+    # Ordinamento decrescente per score (come nello screenshot corretto)
     sorted_results = sorted(results, key=lambda x: x[2], reverse=True)
     lines = [f"{title}\n"]
     
@@ -295,6 +291,7 @@ def main():
                 if df is not None and not df.empty:
                     desc = descriptions.get(ticker, ticker)
                     generate_web_page(ticker, desc, "flash", df, score, signals)
+                time.sleep(0.5) # Pausa di cortesia per evitare rate limiting
                 
         watchlist_results = []
         if watchlist:
@@ -305,6 +302,7 @@ def main():
                 if df is not None and not df.empty:
                     desc = descriptions.get(ticker, ticker)
                     generate_web_page(ticker, desc, "flash", df, score, signals)
+                time.sleep(0.5)
                 
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
