@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Analisi Giornaliera (FLASH)
-Format Telegram: Riga singola per ticker con Delta % giornaliera e Score al 100%.
+Format Telegram: Riga singola per ticker con Delta % giornaliera e Score.
 """
 
 import os
 import sys
 import time
 from datetime import datetime
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 
 import requests
 import yfinance as yf
@@ -24,6 +24,7 @@ from analysis_utils import (
     calculate_trend_estimate,
     format_trend_line
 )
+from web_generator import generate_web_page
 
 
 def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
@@ -57,7 +58,7 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
     return trends[-1]
 
 
-def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
+def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[pd.DataFrame]]:
     signals = []
     extra_data = {}
     
@@ -73,15 +74,22 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     macd_score = 0.5
 
     try:
+        # Metodo di download originale (di ieri)
         df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True, progress=False)
         
-        if df.empty or len(df) < DAILY_MIN_POINTS:
-            return signals, 0.5, extra_data
-        
+        if df.empty:
+            print(f"⚠️ {ticker}: Dati vuoti da Yahoo Finance.")
+            return signals, 0.5, extra_data, None
+            
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
         df = df.dropna()
+        
+        if len(df) < DAILY_MIN_POINTS:
+            print(f"⚠️ {ticker}: Punti insufficienti ({len(df)} < {DAILY_MIN_POINTS}).")
+            return signals, 0.5, extra_data, None
+
         close = df['Close'].squeeze()
         volume = df['Volume'].squeeze()
 
@@ -217,37 +225,38 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
             (ha_force_score * 0.15) + (ha_state_score * 0.10) + (zigzag_score * 0.10) +
             (vol_score * 0.05) + (close_change_score * 0.05) + (rsi_score * 0.05) + (macd_score * 0.05)
         )
-        return signals, round(max(0.0, min(1.0, final_score)), 3), extra_data
+        return signals, round(max(0.0, min(1.0, final_score)), 3), extra_data, df
 
     except Exception as e:
         print(f"❌ {ticker}: {e}")
-        return signals, 0.5, extra_data
+        return signals, 0.5, extra_data, None
 
 
-def create_daily_report_section(title: str, results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+def create_daily_report_section(title: str, results: List[Tuple[str, List[str], float, Dict, Optional[pd.DataFrame]]], descriptions: Dict) -> str:
     if not results:
         return f"{title}\nNessun dato disponibile."
     
     sorted_results = sorted(results, key=lambda x: x[2], reverse=True)
     lines = [f"{title}\n"]
     
-    for ticker, _, score, extra_data in sorted_results:
+    for ticker, _, score, extra_data, _ in sorted_results:
         desc = descriptions.get(ticker, ticker)
         bullet = get_bullet(score)
         var_pct = extra_data.get('daily_var_pct', 0.0)
         sign = "+" if var_pct > 0 else ""
         
-        line = f"{bullet} {ticker} - {desc} {sign}{var_pct:.2f}% (score: {score:.3f})"
+        url = f"https://antoniotonti.github.io/agente_borsa/flash/{ticker}.html"
+        line = f"{bullet} [{ticker}]({url}) - {desc} {sign}{var_pct:.2f}% (score: {score:.3f})"
         lines.append(line)
         
     return "\n".join(lines)
 
 
-def create_portfolio_daily_report(results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+def create_portfolio_daily_report(results: List[Tuple[str, List[str], float, Dict, Optional[pd.DataFrame]]], descriptions: Dict) -> str:
     return create_daily_report_section("💰 *PORTAFOGLIO GIORNALIERO*", results, descriptions)
 
 
-def create_watchlist_daily_report(results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
+def create_watchlist_daily_report(results: List[Tuple[str, List[str], float, Dict, Optional[pd.DataFrame]]], descriptions: Dict) -> str:
     return create_daily_report_section("👁️ *OSSERVATI GIORNALIERI*", results, descriptions)
 
 
@@ -281,15 +290,21 @@ def main():
         if portfolio:
             print("\n💰 ANALISI PORTAFOGLIO")
             for ticker in portfolio:
-                signals, score, extra_data = analyze_daily_ticker(ticker)
-                portfolio_results.append((ticker, signals, score, extra_data))
+                signals, score, extra_data, df = analyze_daily_ticker(ticker)
+                portfolio_results.append((ticker, signals, score, extra_data, df))
+                if df is not None and not df.empty:
+                    desc = descriptions.get(ticker, ticker)
+                    generate_web_page(ticker, desc, "flash", df, score, signals)
                 
         watchlist_results = []
         if watchlist:
             print("\n👁️ ANALISI WATCHLIST")
             for ticker in watchlist:
-                signals, score, extra_data = analyze_daily_ticker(ticker)
-                watchlist_results.append((ticker, signals, score, extra_data))
+                signals, score, extra_data, df = analyze_daily_ticker(ticker)
+                watchlist_results.append((ticker, signals, score, extra_data, df))
+                if df is not None and not df.empty:
+                    desc = descriptions.get(ticker, ticker)
+                    generate_web_page(ticker, desc, "flash", df, score, signals)
                 
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
