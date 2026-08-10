@@ -2,11 +2,12 @@ name: Trading Chiusura
 
 on:
   schedule:
-    - cron: '0 17 * * 1-5'
+    # 17:12 UTC (evita il picco del minuto :00)
+    - cron: '12 17 * * 1-5'
   workflow_dispatch:
 
 permissions:
-  contents: write  # <--- AGGIUNTA QUESTA RIGA
+  contents: write
 
 jobs:
   run-chiusura:
@@ -30,7 +31,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python agent_chiusura.py
+        run: python agente_settimanale.py
 
       - name: Salva modifiche pagine web e stato
         run: |
