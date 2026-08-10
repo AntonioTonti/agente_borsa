@@ -36,6 +36,21 @@ def calculate_trend_estimate(df: pd.DataFrame) -> dict:
     }
 
 
+def format_trend_line(trend_data, target=None, stop_loss=None) -> str:
+    """Formatta la riga del trend per messaggi Telegram o report HTML."""
+    if isinstance(trend_data, dict):
+        trend = trend_data.get("trend", "N/A")
+        tg = trend_data.get("target", 0.0)
+        sl = trend_data.get("stop_loss", 0.0)
+    else:
+        trend = str(trend_data)
+        tg = target if target is not None else 0.0
+        sl = stop_loss if stop_loss is not None else 0.0
+        
+    icon = "📈" if trend == "Rialzista" else ("📉" if trend == "Ribassista" else "➡️")
+    return f"{icon} Trend {trend} | Target: {tg:.2f} | Stop Loss: {sl:.2f}"
+
+
 def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     """Calcola le candele Heikin Ashi."""
     ha_df = df.copy()
@@ -181,9 +196,7 @@ def analyze_ticker(df: pd.DataFrame, ticker: str, description: str = "") -> dict
     signals_list.append(f"{macd_icon} MACD ({macd_val:.4f}) {macd_rel} Signal ({macd_sig_val:.4f})")
     
     # 8. Trend & Livelli
-    trend_icon = "📈" if final_score >= 0.6 else ("➡️" if final_score >= 0.4 else "📉")
-    trend_label = "Rialzista" if final_score >= 0.6 else ("Laterale" if final_score >= 0.4 else "Ribassista")
-    signals_list.append(f"{trend_icon} Trend {trend_label} | Target: {target_price:.2f} | Stop Loss: {stop_loss_price:.2f}")
+    signals_list.append(format_trend_line(trend_data))
 
     return {
         'ticker': ticker,
