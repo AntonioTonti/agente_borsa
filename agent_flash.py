@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Analisi Giornaliera (FLASH)
-Format Telegram: Riga singola per ticker con Delta % giornaliera e Score.
+Format Telegram: Riga singola per ticker con Delta % giornaliera e Score al 100%.
 """
 
 import os
 import sys
 import time
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 
 import requests
 import yfinance as yf
@@ -24,42 +24,6 @@ from analysis_utils import (
     calculate_trend_estimate,
     format_trend_line
 )
-from web_generator import generate_web_page
-
-# Crea una sessione con User-Agent per bypassare i blocchi IP di GitHub Actions
-session = requests.Session()
-session.headers.update({
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-})
-
-
-def fetch_ticker_data(ticker: str) -> Optional[pd.DataFrame]:
-    """Scarica i dati storici bypassando i blocchi IP di Yahoo Finance."""
-    try:
-        # Usa Ticker con la sessione personalizzata
-        t = yf.Ticker(ticker, session=session)
-        df = t.history(period="6mo", interval="1d", auto_adjust=True)
-        
-        if df is None or df.empty:
-            # Secondo tentativo con download diretto
-            df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True, progress=False, session=session)
-
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
-        if df is None or df.empty:
-            print(f"❌ [DOWNLOAD FAILED] {ticker}: Risposta vuota da Yahoo Finance.")
-            return None
-
-        df = df.dropna(subset=['Close'])
-        if len(df) < DAILY_MIN_POINTS:
-            print(f"⚠️ [INSUFFICIENT DATA] {ticker}: Trovati solo {len(df)} punti (minimo {DAILY_MIN_POINTS}).")
-            return None
-            
-        return df
-    except Exception as e:
-        print(f"❌ [ERROR] {ticker}: {e}")
-        return None
 
 
 def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
@@ -93,9 +57,9 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
     return trends[-1]
 
 
-def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[pd.DataFrame]]:
+def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict]:
     signals = []
-    extra_data = {'daily_var_pct': 0.0}
+    extra_data = {}
     
     ema_ma_score = 0.5
     trend_score = 0.5
@@ -108,11 +72,16 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
     rsi_score = 0.5
     macd_score = 0.5
 
-    df = fetch_ticker_data(ticker)
-    if df is None:
-        return signals, 0.5, extra_data, None
-
     try:
+        df = yf.download(ticker, period="6mo", interval="1d", auto_adjust=True, progress=False)
+        
+        if df.empty or len(df) < DAILY_MIN_POINTS:
+            return signals, 0.5, extra_data
+        
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        df = df.dropna()
         close = df['Close'].squeeze()
         volume = df['Volume'].squeeze()
 
@@ -196,33 +165,20 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
 
             if is_doji:
                 ha_state_score = 0.50
-                signals.append("🕯️ HA: Barra Doji (Indecisione)")
             elif is_green:
                 ha_state_score = 1.0 if lower_shadow <= (ha_range * 0.03) else (0.75 if upper_shadow > lower_shadow else 0.60)
-                force_str = "Alta" if ratio_body >= 1.5 else ("Media" if ratio_body >= 1.0 else "Moderata")
-                signals.append(f"🟢 HA: Barra Verde (Forza: {force_str})")
             else:
                 ha_state_score = 0.0 if upper_shadow <= (ha_range * 0.03) else (0.25 if lower_shadow > upper_shadow else 0.40)
-                force_str = "Alta" if ratio_body >= 1.5 else ("Media" if ratio_body >= 1.0 else "Moderata")
-                signals.append(f"🔴 HA: Barra Rossa (Pressione ribassista: {force_str})")
 
         # 6. ZIGZAG (10%)
         zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
         zigzag_score = 1.0 if zz_trend == 1 else (0.0 if zz_trend == -1 else 0.5)
-        if zz_trend == 1:
-            signals.append("↗️ ZigZag: Trend rialzista")
-        elif zz_trend == -1:
-            signals.append("↘️ ZigZag: Trend ribassista")
-        else:
-            signals.append("➡️ ZigZag: Trend neutrale / laterale")
 
         # 7. VOLUME (5%)
         if len(volume) >= 63:
             avg_vol_3m = float(volume.tail(63).mean())
             curr_vol = float(volume.iloc[-1])
             vol_score = 1.0 if curr_vol > avg_vol_3m * 1.5 else (0.75 if curr_vol >= avg_vol_3m else 0.35)
-            vol_ratio = (curr_vol / avg_vol_3m) * 100.0 if avg_vol_3m > 0 else 100.0
-            signals.append(f"📊 Volumi: {vol_ratio:.0f}% della media 3M")
 
         # 8. CHIUSURA VS PRECEDENTE (5%)
         if len(close) >= 2:
@@ -235,9 +191,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
             elif pct_change == 0: close_change_score = 0.50
             elif pct_change > -0.5: close_change_score = 0.25
             else: close_change_score = 0.0
-            
-            sign_chg = "+" if pct_change > 0 else ""
-            signals.append(f"💵 Variazione del giorno: {sign_chg}{pct_change:.2f}%")
 
         # 9. RSI (5%)
         if len(close) >= 15:
@@ -245,8 +198,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
             if not rsi.empty:
                 rsi_val = float(rsi.iloc[-1])
                 rsi_score = 0.15 if rsi_val > 70 else (0.85 if rsi_val < 30 else (0.65 if rsi_val > 60 else (0.35 if rsi_val < 40 else 0.50)))
-                status_rsi = "Ipercomprato" if rsi_val > 70 else ("Ipervenduto" if rsi_val < 30 else "Neutro")
-                signals.append(f"📈 RSI (14): {rsi_val:.1f} ({status_rsi})")
 
         # 10. MACD (5%)
         if len(close) >= 35:
@@ -255,18 +206,10 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
             if len(m_line) > 1 and len(s_line) > 1:
                 m_now, s_now = float(m_line.iloc[-1]), float(s_line.iloc[-1])
                 m_prev, s_prev = float(m_line.iloc[-2]), float(s_line.iloc[-2])
-                if m_now > s_now and m_prev <= s_prev:
-                    macd_score = 1.0
-                    signals.append("⚡ MACD: Crossover rialzista con Signal Line")
-                elif m_now < s_now and m_prev >= s_prev:
-                    macd_score = 0.0
-                    signals.append("⚡ MACD: Crossover ribassista con Signal Line")
-                elif m_now > s_now:
-                    macd_score = 0.75
-                    signals.append("🟢 MACD: Sopra Signal Line")
-                else:
-                    macd_score = 0.25
-                    signals.append("🔴 MACD: Sotto Signal Line")
+                if m_now > s_now and m_prev <= s_prev: macd_score = 1.0
+                elif m_now < s_now and m_prev >= s_prev: macd_score = 0.0
+                elif m_now > s_now: macd_score = 0.75
+                else: macd_score = 0.25
 
         # SCORE FINALE
         final_score = (
@@ -274,11 +217,11 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
             (ha_force_score * 0.15) + (ha_state_score * 0.10) + (zigzag_score * 0.10) +
             (vol_score * 0.05) + (close_change_score * 0.05) + (rsi_score * 0.05) + (macd_score * 0.05)
         )
-        return signals, round(max(0.0, min(1.0, final_score)), 3), extra_data, df
+        return signals, round(max(0.0, min(1.0, final_score)), 3), extra_data
 
     except Exception as e:
-        print(f"❌ Errore durante l'analisi di {ticker}: {e}")
-        return signals, 0.5, extra_data, None
+        print(f"❌ {ticker}: {e}")
+        return signals, 0.5, extra_data
 
 
 def create_daily_report_section(title: str, results: List[Tuple[str, List[str], float, Dict]], descriptions: Dict) -> str:
@@ -294,8 +237,7 @@ def create_daily_report_section(title: str, results: List[Tuple[str, List[str], 
         var_pct = extra_data.get('daily_var_pct', 0.0)
         sign = "+" if var_pct > 0 else ""
         
-        url = f"https://antoniotonti.github.io/agente_borsa/flash/{ticker}.html"
-        line = f"{bullet} [{ticker}]({url}) - {desc} {sign}{var_pct:.2f}% (score: {score:.3f})"
+        line = f"{bullet} {ticker} - {desc} {sign}{var_pct:.2f}% (score: {score:.3f})"
         lines.append(line)
         
     return "\n".join(lines)
@@ -339,21 +281,15 @@ def main():
         if portfolio:
             print("\n💰 ANALISI PORTAFOGLIO")
             for ticker in portfolio:
-                desc = descriptions.get(ticker, ticker)
-                signals, score, extra_data, df = analyze_daily_ticker(ticker)
+                signals, score, extra_data = analyze_daily_ticker(ticker)
                 portfolio_results.append((ticker, signals, score, extra_data))
-                if df is not None and not df.empty:
-                    generate_web_page(ticker, desc, "flash", df, score, signals)
                 
         watchlist_results = []
         if watchlist:
             print("\n👁️ ANALISI WATCHLIST")
             for ticker in watchlist:
-                desc = descriptions.get(ticker, ticker)
-                signals, score, extra_data, df = analyze_daily_ticker(ticker)
+                signals, score, extra_data = analyze_daily_ticker(ticker)
                 watchlist_results.append((ticker, signals, score, extra_data))
-                if df is not None and not df.empty:
-                    generate_web_page(ticker, desc, "flash", df, score, signals)
                 
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
