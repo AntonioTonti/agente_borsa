@@ -3,6 +3,18 @@ import pandas as pd
 import ta
 
 
+def get_bullet(score: float) -> str:
+    """Ritorna l'icona/bullet appropriata in base al valore dello score."""
+    if score >= 0.70:
+        return "🟢"
+    elif score >= 0.50:
+        return "🟡"
+    elif score >= 0.35:
+        return "🟠"
+    else:
+        return "🔴"
+
+
 def calculate_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     """Calcola le candele Heikin Ashi."""
     ha_df = df.copy()
