@@ -2,7 +2,7 @@ name: Trading Chiusura
 
 on:
   schedule:
-    # 17:12 UTC (evita il picco del minuto :00)
+    # 17:12 UTC dal lunedì al venerdì
     - cron: '12 17 * * 1-5'
   workflow_dispatch:
 
