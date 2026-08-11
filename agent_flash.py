@@ -74,7 +74,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
     macd_score = 0.5
 
     try:
-        # Download tramite Ticker.history per evitare problemi di MultiIndex di yf.download
         tk = yf.Ticker(ticker)
         df = tk.history(period="6mo", interval="1d", auto_adjust=True)
         
@@ -82,7 +81,6 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
             print(f"⚠️ {ticker}: Dati vuoti o insufficienti ({len(df)} righe).")
             return signals, 0.5, extra_data, None
 
-        # Garanzia pulizia colonne
         df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
 
         close = df['Close']
@@ -168,20 +166,53 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
 
             if is_doji:
                 ha_state_score = 0.50
+                ha_desc = "Doji (Incertezza)"
             elif is_green:
-                ha_state_score = 1.0 if lower_shadow <= (ha_range * 0.03) else (0.75 if upper_shadow > lower_shadow else 0.60)
+                if lower_shadow <= (ha_range * 0.03):
+                    ha_state_score = 1.0
+                    ha_desc = "Verde senza ombra inf. (Molto Forte 🟢)"
+                elif upper_shadow > lower_shadow:
+                    ha_state_score = 0.75
+                    ha_desc = "Verde (Spinta Rialzista 🟢)"
+                else:
+                    ha_state_score = 0.60
+                    ha_desc = "Verde con ombra inf. (Pressione di vendita)"
             else:
-                ha_state_score = 0.0 if upper_shadow <= (ha_range * 0.03) else (0.25 if lower_shadow > upper_shadow else 0.40)
+                if upper_shadow <= (ha_range * 0.03):
+                    ha_state_score = 0.0
+                    ha_desc = "Rossa senza ombra sup. (Molto Debole 🔴)"
+                elif lower_shadow > upper_shadow:
+                    ha_state_score = 0.25
+                    ha_desc = "Rossa (Spinta Ribassista 🔴)"
+                else:
+                    ha_state_score = 0.40
+                    ha_desc = "Rossa con ombra sup. (Pressione di acquisto)"
+
+            signals.append(f"🕯️ Heikin Ashi: {ha_desc} - Forza Corpo: {ratio_body:.2f}x media 3M")
 
         # 6. ZIGZAG (10%)
         zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
         zigzag_score = 1.0 if zz_trend == 1 else (0.0 if zz_trend == -1 else 0.5)
+        zz_desc = "Rialzista 🟢" if zz_trend == 1 else ("Ribassista 🔴" if zz_trend == -1 else "Neutro ⚪")
+        signals.append(f"⚡ ZigZag (5%): Trend {zz_desc}")
 
         # 7. VOLUME (5%)
         if len(volume) >= 63:
             avg_vol_3m = float(volume.tail(63).mean())
             curr_vol = float(volume.iloc[-1])
-            vol_score = 1.0 if curr_vol > avg_vol_3m * 1.5 else (0.75 if curr_vol >= avg_vol_3m else 0.35)
+            vol_ratio = (curr_vol / avg_vol_3m) if avg_vol_3m > 0 else 1.0
+            
+            if curr_vol > avg_vol_3m * 1.5:
+                vol_score = 1.0
+                vol_desc = "Volumi in forte aumento (>150% media) 🟢"
+            elif curr_vol >= avg_vol_3m:
+                vol_score = 0.75
+                vol_desc = "Volumi sopra la media 3M 🟢"
+            else:
+                vol_score = 0.35
+                vol_desc = "Volumi sotto la media 3M 🔴"
+                
+            signals.append(f"📊 Volumi: {curr_vol:,.0f} vs Media 3M {avg_vol_3m:,.0f} ({vol_desc})")
 
         # 8. CHIUSURA VS PRECEDENTE (5%)
         if len(close) >= 2:
@@ -195,12 +226,31 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
             elif pct_change > -0.5: close_change_score = 0.25
             else: close_change_score = 0.0
 
+            sign_chg = "+" if pct_change > 0 else ""
+            signals.append(f"💵 Variazione Chiusura: {sign_chg}{pct_change:.2f}% rispetto a ieri")
+
         # 9. RSI (5%)
         if len(close) >= 15:
             rsi = ta.momentum.rsi(close, window=14).dropna()
             if not rsi.empty:
                 rsi_val = float(rsi.iloc[-1])
-                rsi_score = 0.15 if rsi_val > 70 else (0.85 if rsi_val < 30 else (0.65 if rsi_val > 60 else (0.35 if rsi_val < 40 else 0.50)))
+                if rsi_val > 70:
+                    rsi_score = 0.15
+                    rsi_desc = "Ipercomprato (>70) 🔴"
+                elif rsi_val < 30:
+                    rsi_score = 0.85
+                    rsi_desc = "Ipervenduto (<30) 🟢"
+                elif rsi_val > 60:
+                    rsi_score = 0.65
+                    rsi_desc = "Fasciatura Rialzista (60-70) 🟢"
+                elif rsi_val < 40:
+                    rsi_score = 0.35
+                    rsi_desc = "Fasciatura Ribassista (30-40) 🔴"
+                else:
+                    rsi_score = 0.50
+                    rsi_desc = "Zona Neutra (40-60) ⚪"
+                
+                signals.append(f"🟣 RSI (14): {rsi_val:.2f} - {rsi_desc}")
 
         # 10. MACD (5%)
         if len(close) >= 35:
@@ -209,10 +259,21 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
             if len(m_line) > 1 and len(s_line) > 1:
                 m_now, s_now = float(m_line.iloc[-1]), float(s_line.iloc[-1])
                 m_prev, s_prev = float(m_line.iloc[-2]), float(s_line.iloc[-2])
-                if m_now > s_now and m_prev <= s_prev: macd_score = 1.0
-                elif m_now < s_now and m_prev >= s_prev: macd_score = 0.0
-                elif m_now > s_now: macd_score = 0.75
-                else: macd_score = 0.25
+                
+                if m_now > s_now and m_prev <= s_prev:
+                    macd_score = 1.0
+                    macd_desc = "Crossover Rialzista (CROSSOVER UP) 📈"
+                elif m_now < s_now and m_prev >= s_prev:
+                    macd_score = 0.0
+                    macd_desc = "Crossover Ribassista (CROSSOVER DOWN) 📉"
+                elif m_now > s_now:
+                    macd_score = 0.75
+                    macd_desc = "Sopra la Signal Line (Fase Positiva) 🟢"
+                else:
+                    macd_score = 0.25
+                    macd_desc = "Sotto la Signal Line (Fase Negativa) 🔴"
+                    
+                signals.append(f"📊 MACD: {macd_desc}")
 
         # SCORE FINALE
         final_score = (
@@ -231,7 +292,6 @@ def create_daily_report_section(title: str, results: List[Tuple[str, List[str], 
     if not results:
         return f"{title}\nNessun dato disponibile."
     
-    # Ordinamento decrescente per score (come nello screenshot corretto)
     sorted_results = sorted(results, key=lambda x: x[2], reverse=True)
     lines = [f"{title}\n"]
     
@@ -291,7 +351,7 @@ def main():
                 if df is not None and not df.empty:
                     desc = descriptions.get(ticker, ticker)
                     generate_web_page(ticker, desc, "flash", df, score, signals)
-                time.sleep(0.5) # Pausa di cortesia per evitare rate limiting
+                time.sleep(0.5)
                 
         watchlist_results = []
         if watchlist:
