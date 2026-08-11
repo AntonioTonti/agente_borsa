@@ -2,8 +2,8 @@ name: Trading Flash (Orario)
 
 on:
   schedule:
-    # Esegue al minuto 7 di ogni ora dalle 7 alle 17, dal lunedì al venerdì (UTC)
-    - cron: '7 7-17/1 * * 1-5'
+    # Esegue al minuto 7 di ogni ora dalle 07:00 alle 17:00 UTC (Lun-Ven)
+    - cron: '7 7,8,9,10,11,12,13,14,15,16,17 * * 1-5'
   workflow_dispatch:
 
 permissions:
