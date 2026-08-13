@@ -1,9 +1,6 @@
 name: Trading Flash (Orario)
 
 on:
-  schedule:
-    # Esegue al minuto 41 di ogni ora (fuori dai picchi di traffico)
-    - cron: '41 7-15 * * 1-5'
   workflow_dispatch:
 
 permissions:
