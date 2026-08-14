@@ -1,0 +1,41 @@
+name: Agente ETF Orario
+
+on:
+  schedule:
+    # Esegue ogni ora dal lunedì al venerdì tra le 08:00 e le 17:00 UTC (9:00 - 18:00 italiane)
+    - cron: '0 8-17 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  run-etf-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout codice
+        uses: actions/checkout@v4
+
+      - name: Configura Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Installa dipendenze
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install plotly yfinance pandas ta requests
+
+      - name: Esegui Agente ETF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python agente_etf.py
+
+      - name: Salva modifiche pagine web e stato
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/ data_state/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "auto: aggiornamento report ETF [skip ci]" && git push)
