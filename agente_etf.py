@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-Agente ETF - Analisi Oraria per ETF a Leva / Direzionali
-Ottimizzato per strumenti a Leva (es. FTSE MIB 2x, Short/Bull):
+Agente ETF - Analisi Oraria per ETF a Leva / Direzionali (Versione Corretta Anti-Falso Positivo)
 - Timeframe: Orario (1h)
-- Indicatori: Supertrend, ADX (filtro trend), MACD Veloce (8,17,9), RSI (9), Heikin Ashi, EMA/SMA.
-- Report Telegram aggregato + Generazione Pagina Web con Grafico Score aggiornato.
+- ADX usato come KILL-SWITCH Anti-Lateralità (se ADX < 20 lo score viene penalizzato drasticamente)
+- Zoom grafico ridotto a 10gg per leggibilità candele orarie
 """
 
 import os
@@ -95,30 +94,26 @@ def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float =
 
 
 def analyze_etf_leveraged(ticker: str) -> Tuple[List[str], float, Dict, Optional[pd.DataFrame]]:
-    """Analisi specifica per ETF a leva su timeframe orario."""
+    """Analisi specifica per ETF a leva su timeframe orario con Filtro Anti-Lateralità."""
     signals = []
     extra_data = {'daily_var_pct': 0.0}
     
-    # Inizializzazione Score
-    st_score = 0.5        # 15%
-    macd_score = 0.5      # 15%
+    st_score = 0.5        # 20%
+    macd_score = 0.5      # 20%
     ha_score = 0.5        # 20%
-    rsi_score = 0.5       # 10%
+    rsi_score = 0.5       # 15%
     ema_ma_score = 0.5   # 15%
-    trend_score = 0.5    # 10%
-    adx_score = 0.5      # 10%
-    vol_score = 0.5      # 5%
+    vol_score = 0.5      # 10%
 
     try:
         tk = yf.Ticker(ticker)
-        # Timeframe Orario per massima reattività
-        df = tk.history(period="1mo", interval="1h", auto_adjust=True)
+        # Scarichiamo dati orari degli ultimi 12 giorni per un grafico pulito
+        df = tk.history(period="12d", interval="1h", auto_adjust=True)
         
-        if df.empty or len(df) < 30:
-            # Fallback su daily se i dati orari non sono disponibili
-            df = tk.history(period="6mo", interval="1d", auto_adjust=True)
-            
         if df.empty or len(df) < 20:
+            df = tk.history(period="1mo", interval="1d", auto_adjust=True)
+            
+        if df.empty or len(df) < 15:
             print(f"⚠️ {ticker}: Dati insufficienti ({len(df)} righe).")
             return signals, 0.5, extra_data, None
 
@@ -126,7 +121,22 @@ def analyze_etf_leveraged(ticker: str) -> Tuple[List[str], float, Dict, Optional
         close = df['Close']
         volume = df['Volume']
 
-        # 1. SUPERTREND ORARIO (15%)
+        # 1. FILTRO FONDAMENTALE ADX (KILL-SWITCH ANTI-LATERALITÀ)
+        adx_val = 0.0
+        is_lateral = True
+        if len(df) >= 15:
+            adx_df = ta.trend.ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+            adx_series = adx_df.adx().dropna()
+            if not adx_series.empty:
+                adx_val = float(adx_series.iloc[-1])
+                is_lateral = adx_val < 20.0
+
+        if is_lateral:
+            signals.append(f"⛔ ADX: {adx_val:.1f} - FASE LATERALE DETETTATA (Blocco segnale d'acquisto) ⚠️")
+        else:
+            signals.append(f"⚡ ADX: {adx_val:.1f} - Trend in corso confermato 🟢")
+
+        # 2. SUPERTREND ORARIO (20%)
         st_line, st_dir = calculate_supertrend(df, period=10, multiplier=3.0)
         last_st_dir = st_dir.iloc[-1]
         last_st_val = st_line.iloc[-1]
@@ -139,7 +149,7 @@ def analyze_etf_leveraged(ticker: str) -> Tuple[List[str], float, Dict, Optional
             st_score = 0.0
             signals.append(f"🔴 Supertrend ORARIO: RIBASSISTA (Resistenza: {last_st_val:{fmt}})")
 
-        # 2. MACD VELOCE (8, 17, 9) (15%)
+        # 3. MACD VELOCE (8, 17, 9) (20%)
         macd_obj = ta.trend.MACD(close=close, window_slow=17, window_fast=8, window_sign=9)
         m_line, s_line = macd_obj.macd().dropna(), macd_obj.macd_signal().dropna()
         if len(m_line) > 1 and len(s_line) > 1:
@@ -159,9 +169,9 @@ def analyze_etf_leveraged(ticker: str) -> Tuple[List[str], float, Dict, Optional
                 macd_score = 0.25
                 signals.append("🔴 MACD Veloce: Negativo (Sotto Signal Line)")
 
-        # 3. HEIKIN ASHI CANDLE ANALYSIS (20%)
+        # 4. HEIKIN ASHI CANDLE ANALYSIS (20%)
         ha = calculate_heikin_ashi(df)
-        if len(ha) >= 10:
+        if len(ha) >= 5:
             last_ha_close = float(ha['HA_Close'].iloc[-1])
             last_ha_open = float(ha['HA_Open'].iloc[-1])
             last_ha_low = float(ha['HA_Low'].iloc[-1])
@@ -187,15 +197,15 @@ def analyze_etf_leveraged(ticker: str) -> Tuple[List[str], float, Dict, Optional
                     ha_score = 0.30
                     signals.append("🕯️ Heikin Ashi: Candela Rossa 🔴")
 
-        # 4. RSI VELOCE (9) (10%)
+        # 5. RSI VELOCE (9) (15%)
         rsi = ta.momentum.rsi(close, window=9).dropna()
         if not rsi.empty:
             rsi_val = float(rsi.iloc[-1])
             if rsi_val > 70:
-                rsi_score = 0.30  # Ipercomprato a breve
+                rsi_score = 0.30
                 signals.append(f"🟣 RSI (9): {rsi_val:.1f} - Ipercomprato (Attenzione) ⚠️")
             elif rsi_val < 30:
-                rsi_score = 0.80  # Potenziale irrobustimento
+                rsi_score = 0.80
                 signals.append(f"🟣 RSI (9): {rsi_val:.1f} - Ipervenduto (Rimbalzo possibile) 🟢")
             elif rsi_val >= 50:
                 rsi_score = 0.85
@@ -204,44 +214,26 @@ def analyze_etf_leveraged(ticker: str) -> Tuple[List[str], float, Dict, Optional
                 rsi_score = 0.20
                 signals.append(f"🟣 RSI (9): {rsi_val:.1f} - Zona di Debolezza 🔴")
 
-        # 5. EMA10 vs MA31 (15%)
+        # 6. EMA10 vs MA31 (15%)
         if len(close) >= 31:
             ema10 = ta.trend.ema_indicator(close, window=10).iloc[-1]
             ma31 = ta.trend.sma_indicator(close, window=31).iloc[-1]
-            if ema10 > ma31:
+            # Verifica scarto % per evitare falsi incroci da 0.0001
+            diff_pct = ((ema10 - ma31) / ma31) * 100.0
+            
+            if diff_pct > 0.1:
                 ema_ma_score = 0.85
-                signals.append(f"📊 Medie: EMA10 ({ema10:{fmt}}) sopra MA31 ({ma31:{fmt}}) 🟢")
-            else:
+                signals.append(f"📊 Medie: EMA10 ({ema10:{fmt}}) sopra MA31 ({ma31:{fmt}}) (+{diff_pct:.2f}%) 🟢")
+            elif diff_pct < -0.1:
                 ema_ma_score = 0.15
-                signals.append(f"📊 Medie: MA31 ({ma31:{fmt}}) sopra EMA10 ({ema10:{fmt}}) 🔴")
-
-        # 6. STIMA TREND 7 PERIODI (10%)
-        if len(close) >= 7:
-            var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
-            extra_data.update({'var_percent': var_percent, 'target_price': target_price, 'stop_loss': stop_loss})
-            signals.append(format_trend_line(var_percent, target_price, stop_loss))
-            if var_percent > 2.0: trend_score = 1.0
-            elif var_percent > 0: trend_score = 0.70
-            elif var_percent > -2.0: trend_score = 0.30
-            else: trend_score = 0.0
-
-        # 7. FILTRO ADX - FORZA DEL TREND ANTI-LATERALITÀ (10%)
-        if len(df) >= 20:
-            adx_df = ta.trend.ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-            adx_val = float(adx_df.adx().dropna().iloc[-1])
-            if adx_val >= 25:
-                adx_score = 1.0
-                signals.append(f"⚡ ADX: {adx_val:.1f} - Trend Forte in Corso 🟢")
-            elif adx_val >= 20:
-                adx_score = 0.70
-                signals.append(f"⚡ ADX: {adx_val:.1f} - Trend Moderato 🟢")
+                signals.append(f"📊 Medie: MA31 ({ma31:{fmt}}) sopra EMA10 ({ema10:{fmt}}) ({diff_pct:.2f}%) 🔴")
             else:
-                adx_score = 0.20
-                signals.append(f"⚡ ADX: {adx_val:.1f} - Fase Laterale (Pericolo Leva!) ⚠️")
+                ema_ma_score = 0.50
+                signals.append(f"📊 Medie: EMA10 e MA31 Sovrapposte (Incertezza) ⚪")
 
-        # 8. VOLUMI ULTIMA CANDELA (5%)
-        if len(volume) >= 20:
-            avg_vol = float(volume.tail(20).mean())
+        # 7. VOLUMI ULTIMA CANDELA (10%)
+        if len(volume) >= 10:
+            avg_vol = float(volume.tail(10).mean())
             curr_vol = float(volume.iloc[-1])
             if curr_vol >= avg_vol:
                 vol_score = 0.85
@@ -250,22 +242,28 @@ def analyze_etf_leveraged(ticker: str) -> Tuple[List[str], float, Dict, Optional
                 vol_score = 0.35
                 signals.append(f"📊 Volumi: Sotto la media oraria ({curr_vol:,.0f}) 🔴")
 
-        # Calcolo Variazione Percentuale Ultima Candela
+        # Variazione percentuale oraria
         if len(close) >= 2:
             pct_change = ((close.iloc[-1] - close.iloc[-2]) / close.iloc[-2]) * 100.0
             extra_data['daily_var_pct'] = pct_change
 
-        # SCORE FINALE PESATO PER ETF A LEVA (100%)
-        final_score = (
-            (st_score * 0.15) +
-            (macd_score * 0.15) +
+        # CALCOLO SCORE GREZZO
+        raw_score = (
+            (st_score * 0.20) +
+            (macd_score * 0.20) +
             (ha_score * 0.20) +
-            (rsi_score * 0.10) +
+            (rsi_score * 0.15) +
             (ema_ma_score * 0.15) +
-            (trend_score * 0.10) +
-            (adx_score * 0.10) +
-            (vol_score * 0.05)
+            (vol_score * 0.10)
         )
+
+        # 🛑 APPLICAZIONE KILL-SWITCH ANTI-LATERALITÀ
+        if is_lateral:
+            # Se ADX < 20, applica penalizzazione del 50% e fissa tetto massimo a 0.45
+            final_score = min(0.45, raw_score * 0.50)
+        else:
+            final_score = raw_score
+
         return signals, round(max(0.0, min(1.0, final_score)), 3), extra_data, df
 
     except Exception as e:
@@ -315,7 +313,7 @@ def main():
     start_time = time.time()
     try:
         print("=" * 60)
-        print("📊 AGENTE ETF A LEVA - ANALISI ORARIA")
+        print("📊 AGENTE ETF A LEVA - ANALISI ORARIA (ANTI-LATERALITÀ)")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
