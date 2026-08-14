@@ -22,7 +22,7 @@ import numpy as np
 import ta
 
 sys.path.append('.')
-from config import load_titoli_csv, DAILY_MIN_POINTS
+from config import DAILY_MIN_POINTS
 from analysis_utils import (
     calculate_heikin_ashi,
     get_bullet,
@@ -30,6 +30,36 @@ from analysis_utils import (
     format_trend_line
 )
 from web_generator import generate_web_page
+
+
+def load_etf_from_csv(csv_path: str = "titoli.csv") -> Tuple[List[str], Dict[str, str]]:
+    """Carica i titoli dal CSV leggendo sia la colonna 'tipo' == 'ETF' sia la descrizione."""
+    etf_tickers = []
+    descriptions = {}
+    
+    if not os.path.exists(csv_path):
+        print(f"❌ File {csv_path} non trovato.")
+        return etf_tickers, descriptions
+
+    try:
+        df = pd.read_csv(csv_path)
+        df.columns = [c.strip().lower() for c in df.columns]
+        
+        for _, row in df.iterrows():
+            code = str(row['codice']).strip()
+            tipo = str(row['tipo']).strip().upper()
+            desc = str(row['descrizione']).strip()
+            descriptions[code] = desc
+            
+            # Intercetta se il tipo è esplicitamente ETF o se c'è un indicatore ETF nel codice/descrizione
+            if tipo == 'ETF' or 'ETF' in desc.upper() or 'ETF' in code.upper() or '2X' in desc.upper():
+                etf_tickers.append(code)
+                
+        print(f"✅ CSV caricato: trovati {len(etf_tickers)} titoli ETF ({', '.join(etf_tickers)})")
+    except Exception as e:
+        print(f"❌ Errore lettura CSV: {e}")
+        
+    return etf_tickers, descriptions
 
 
 def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
@@ -335,26 +365,19 @@ def main():
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
-        portfolio, watchlist, descriptions = load_titoli_csv()
-        
-        # Uniamo tutte le liste e usiamo il filtro degli ETF
-        all_tickers = list(dict.fromkeys(portfolio + watchlist))
+        etf_tickers, descriptions = load_etf_from_csv("titoli.csv")
         
         etf_results = []
-        print("\n🔎 FILTRAGGIO E ANALISI SOLI TITOLI ETF")
         
-        for ticker in all_tickers:
-            desc = descriptions.get(ticker, "").upper()
+        for ticker in etf_tickers:
+            desc = descriptions.get(ticker, ticker)
+            print(f"-> Analisi ETF: {ticker} ({desc})")
+            signals, score, extra_data, df = analyze_etf_ticker(ticker)
+            etf_results.append((ticker, signals, score, extra_data, df))
             
-            # FILTRO SOLI ETF: verifica la presenza della parola "ETF" nella descrizione o nel ticker
-            if "ETF" in desc or "ETF" in ticker.upper() or "SHORT" in desc or "BEAR" in desc or "BULL" in desc or "2X" in desc:
-                print(f"-> Analisi ETF: {ticker} ({desc})")
-                signals, score, extra_data, df = analyze_etf_ticker(ticker)
-                etf_results.append((ticker, signals, score, extra_data, df))
-                
-                if df is not None and not df.empty:
-                    generate_web_page(ticker, descriptions.get(ticker, ticker), "flash", df, score, signals)
-                time.sleep(0.3)
+            if df is not None and not df.empty:
+                generate_web_page(ticker, desc, "flash", df, score, signals)
+            time.sleep(0.3)
         
         # INVIO DI UN UNICO MESSAGGIO TELEGRAM
         token = os.getenv("TELEGRAM_BOT_TOKEN")
