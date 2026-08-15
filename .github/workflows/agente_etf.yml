@@ -1,10 +1,7 @@
 name: Agente ETF Orario
 
 on:
-  schedule:
-    # Esegue ogni ora dal lunedì al venerdì tra le 08:00 e le 17:00 UTC (9:00 - 18:00 italiane)
-    - cron: '0 8-17 * * 1-5'
-  workflow_dispatch:
+workflow_dispatch:
 
 permissions:
   contents: write
