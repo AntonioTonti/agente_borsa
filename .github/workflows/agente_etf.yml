@@ -1,7 +1,7 @@
 name: Agente ETF Orario
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
   contents: write
