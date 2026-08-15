@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Modulo per la generazione della pagina HTML con grafico Plotly avanzato.
-Ottimizzato per candele orarie (asse X discreto per eliminare buchi notturni e weekend).
+Utilizza rangebreaks native per eliminare i buchi notturni/weekend senza rompere il rendering di Candlestick e Volumi.
 """
 
 import os
@@ -19,16 +19,15 @@ def generate_web_page(ticker: str, desc: str, mode: str, df: pd.DataFrame, score
         os.makedirs(output_dir, exist_ok=True)
         file_path = os.path.join(output_dir, f"{ticker}.html")
 
-        # Formattazione data/ora per l'asse X discreto (elimina buchi di notte e weekend)
-        if isinstance(df.index, pd.DatetimeIndex):
-            x_dates = df.index.strftime('%d/%m %H:%M')
-        else:
-            x_dates = [str(x) for x in df.index]
+        # Verifica e assicura l'indice Datetime
+        plot_df = df.copy()
+        if not isinstance(plot_df.index, pd.DatetimeIndex):
+            plot_df.index = pd.to_datetime(plot_df.index)
 
-        # Colori per i volumi (Verdi se Close >= Open, Rossi se Close < Open)
-        vol_colors = ['#00c853' if c >= o else '#ff5252' for c, o in zip(df['Close'], df['Open'])]
+        # Colori per i volumi (Verde se Close >= Open, Rosso se Close < Open)
+        vol_colors = ['#00c853' if c >= o else '#ff5252' for c, o in zip(plot_df['Close'], plot_df['Open'])]
 
-        # Creazione figura con subplots
+        # Creazione figura con 3 subplots
         fig = make_subplots(
             rows=3, cols=1,
             shared_xaxes=True,
@@ -37,14 +36,14 @@ def generate_web_page(ticker: str, desc: str, mode: str, df: pd.DataFrame, score
             subplot_titles=(f"{ticker} - {desc} ({mode.upper()})", "", "")
         )
 
-        # 1. Candele
+        # 1. CANDELE PREZZO (RIGA 1)
         fig.add_trace(
             go.Candlestick(
-                x=x_dates,
-                open=df['Open'],
-                high=df['High'],
-                low=df['Low'],
-                close=df['Close'],
+                x=plot_df.index,
+                open=plot_df['Open'],
+                high=plot_df['High'],
+                low=plot_df['Low'],
+                close=plot_df['Close'],
                 name="Prezzo",
                 increasing_line_color='#00c853',
                 decreasing_line_color='#ff5252',
@@ -54,11 +53,28 @@ def generate_web_page(ticker: str, desc: str, mode: str, df: pd.DataFrame, score
             row=1, col=1
         )
 
-        # 2. Volumi (Barre colorate e piene)
+        # 2. SOVRAPPOSIZIONE RIFERIMENTI DI PREZZO & INDICATORI (RIGA 1)
+        # Supertrend / Trailing Stop (se presenti)
+        if 'Supertrend' in plot_df.columns:
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Supertrend'], mode='lines', name='Supertrend', line=dict(color='#ffd54f', width=2, dash='dot')), row=1, col=1)
+        
+        # Medie Mobili
+        if 'EMA10' in plot_df.columns:
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['EMA10'], mode='lines', name='EMA 10', line=dict(color='#ffa726', width=1.5)), row=1, col=1)
+        if 'MA31' in plot_df.columns:
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA31'], mode='lines', name='MA 31', line=dict(color='#29b6f6', width=1.5)), row=1, col=1)
+
+        # Target Price e Stop Loss (se presenti nel DF)
+        if 'Target' in plot_df.columns:
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['Target'], mode='lines', name='Target Price', line=dict(color='#00e676', width=1.5, dash='dash')), row=1, col=1)
+        if 'StopLoss' in plot_df.columns:
+            fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['StopLoss'], mode='lines', name='Stop Loss', line=dict(color='#ff1744', width=1.5, dash='dash')), row=1, col=1)
+
+        # 3. VOLUMI (RIGA 2)
         fig.add_trace(
             go.Bar(
-                x=x_dates,
-                y=df['Volume'],
+                x=plot_df.index,
+                y=plot_df['Volume'],
                 name="Volume",
                 marker_color=vol_colors,
                 opacity=0.75
@@ -66,25 +82,46 @@ def generate_web_page(ticker: str, desc: str, mode: str, df: pd.DataFrame, score
             row=2, col=1
         )
 
-        # 3. Indicatori extra se presenti (es. RSI o Medie)
-        if 'EMA10' in df.columns:
-            fig.add_trace(go.Scatter(x=x_dates, y=df['EMA10'], mode='lines', name='EMA 10', line=dict(color='#ffa726', width=1.5)), row=1, col=1)
-        if 'MA31' in df.columns:
-            fig.add_trace(go.Scatter(x=x_dates, y=df['MA31'], mode='lines', name='MA 31', line=dict(color='#29b6f6', width=1.5)), row=1, col=1)
+        # 4. RSI (RIGA 3)
+        if 'RSI' in plot_df.columns:
+            rsi_series = plot_df['RSI']
+        else:
+            import ta
+            rsi_series = ta.momentum.rsi(plot_df['Close'], window=9 if mode == 'flash' else 14)
 
-        # Layout Dark Mode
+        fig.add_trace(
+            go.Scatter(
+                x=plot_df.index,
+                y=rsi_series,
+                mode='lines',
+                name="RSI",
+                line=dict(color='#ab47bc', width=1.5)
+            ),
+            row=3, col=1
+        )
+
+        # Linee di soglia RSI (30 e 70)
+        fig.add_hline(y=70, line_dash="dash", line_color="#ff5252", row=3, col=1)
+        fig.add_hline(y=30, line_dash="dash", line_color="#00c853", row=3, col=1)
+
+        # LAYOUT DARK MODE
         fig.update_layout(
             template="plotly_dark",
             height=800,
             margin=dict(l=40, r=40, t=50, b=40),
-            xaxis_rangeslider_visible=False,
             showlegend=True,
             paper_bgcolor="#121212",
             plot_bgcolor="#1e1e1e"
         )
 
-        # Eliminazione spazi vuoti (notti/weekend) imponendo asse categoriale
-        fig.update_xaxes(type='category', nticks=12)
+        # CONFIGURAZIONE ASSE X NATIVA CON RANGEBREAKS (Niente buchi, Candele cicciotte)
+        fig.update_xaxes(
+            rangeslider_visible=False,
+            rangebreaks=[
+                dict(bounds=["sat", "mon"]),           # Nasconde i Fine Settimana
+                dict(bounds=[17.5, 9], pattern="hour") # Nasconde la notte (dalle 17:30 alle 09:00)
+            ]
+        )
 
         # Formattazione lista segnali
         signals_html = "".join([f"<li>{s}</li>" for s in signals])
@@ -135,7 +172,7 @@ def generate_web_page(ticker: str, desc: str, mode: str, df: pd.DataFrame, score
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(html_content)
 
-        print(f"📄 Pagina Web generata: {file_path}")
+        print(f"📄 Pagina Web generata con successo: {file_path}")
 
     except Exception as e:
         print(f"⚠️ Errore nella generazione della pagina web per {ticker}: {e}")
