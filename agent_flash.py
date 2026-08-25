@@ -83,6 +83,32 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
 
         df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
 
+        # --- RECUPERO PREVIOUS CLOSE E CALCOLO VARIAZIONE % ---
+        last_price = float(df['Close'].iloc[-1])
+        prev_close = None
+
+        try:
+            # Tenta il recupero veloce e nativo della chiusura precedente da yfinance
+            if hasattr(tk, 'fast_info') and 'previousClose' in tk.fast_info:
+                prev_close = float(tk.fast_info['previousClose'])
+        except Exception:
+            prev_close = None
+
+        # Fallback al dataframe storico se fast_info fallisce o non è disponibile
+        if prev_close is None or np.isnan(prev_close) or prev_close <= 0:
+            if len(df) >= 2:
+                prev_close = float(df['Close'].iloc[-2])
+            else:
+                prev_close = last_price
+
+        if prev_close > 0:
+            pct_change = ((last_price - prev_close) / prev_close) * 100.0
+        else:
+            pct_change = 0.0
+
+        extra_data['daily_var_pct'] = pct_change
+        # ------------------------------------------------------
+
         close = df['Close']
         volume = df['Volume']
 
@@ -215,19 +241,14 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
             signals.append(f"📊 Volumi: {curr_vol:,.0f} vs Media 3M {avg_vol_3m:,.0f} ({vol_desc})")
 
         # 8. CHIUSURA VS PRECEDENTE (5%)
-        if len(close) >= 2:
-            last_close, prev_close = float(close.iloc[-1]), float(close.iloc[-2])
-            pct_change = ((last_close - prev_close) / prev_close) * 100.0
-            extra_data['daily_var_pct'] = pct_change
-            
-            if pct_change > 0.5: close_change_score = 1.0
-            elif pct_change > 0: close_change_score = 0.75
-            elif pct_change == 0: close_change_score = 0.50
-            elif pct_change > -0.5: close_change_score = 0.25
-            else: close_change_score = 0.0
+        if pct_change > 0.5: close_change_score = 1.0
+        elif pct_change > 0: close_change_score = 0.75
+        elif pct_change == 0: close_change_score = 0.50
+        elif pct_change > -0.5: close_change_score = 0.25
+        else: close_change_score = 0.0
 
-            sign_chg = "+" if pct_change > 0 else ""
-            signals.append(f"💵 Variazione Chiusura: {sign_chg}{pct_change:.2f}% rispetto a ieri")
+        sign_chg = "+" if pct_change > 0 else ""
+        signals.append(f"💵 Variazione Chiusura: {sign_chg}{pct_change:.2f}% rispetto a ieri")
 
         # 9. RSI (5%)
         if len(close) >= 15:
