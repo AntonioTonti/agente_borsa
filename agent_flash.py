@@ -268,15 +268,37 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
                 
             signals.append(f"📊 Volumi: {curr_vol:,.0f} vs Media 3M {avg_vol_3m:,.0f} ({vol_desc})")
 
-        # 9. CHIUSURA VS PRECEDENTE (5%)
-        if pct_change > 0.5: close_change_score = 1.0
-        elif pct_change > 0: close_change_score = 0.75
-        elif pct_change == 0: close_change_score = 0.50
-        elif pct_change > -0.5: close_change_score = 0.25
-        else: close_change_score = 0.0
+        # --- ESTRAZIONE PREZZO LIVE E PREVIOUS CLOSE ---
+        fast_info = getattr(tk, 'fast_info', {})
+        last_price = fast_info.get('lastPrice', None)
+        prev_close = fast_info.get('previousClose', None)
+
+        # Fallback nel caso in cui fast_info sia momentaneamente indisponibile
+        if last_price is None or np.isnan(last_price):
+            last_price = float(df['Close'].iloc[-1])
+        if prev_close is None or np.isnan(prev_close) or prev_close <= 0:
+            prev_close = float(df['Close'].iloc[-2]) if len(df) >= 2 else last_price
+
+        # Variazione % REALE e INTRADAY
+        pct_change = ((last_price - prev_close) / prev_close) * 100.0
+        extra_data['daily_var_pct'] = pct_change
+        # -----------------------------------------------
+
+        # 9. VARIAZIONE % GIORNALIERA / INTRADAY (5%)
+        if pct_change > 0.5: 
+            close_change_score = 1.0
+        elif pct_change > 0: 
+            close_change_score = 0.75
+        elif pct_change == 0: 
+            close_change_score = 0.50
+        elif pct_change > -0.5: 
+            close_change_score = 0.25
+        else: 
+            close_change_score = 0.0
 
         sign_chg = "+" if pct_change > 0 else ""
-        signals.append(f"💵 Variazione Chiusura: {sign_chg}{pct_change:.2f}% rispetto a ieri")
+        # Dicitura aggiornata per chiarire che si tratta del dato live/intraday
+        signals.append(f"💵 Variazione Intraday: {sign_chg}{pct_change:.2f}% (Prezzo: {last_price:.2f} | Chiusura Ieri: {prev_close:.2f})")
 
         # 10. RSI (5%)
         if len(close) >= 15:
