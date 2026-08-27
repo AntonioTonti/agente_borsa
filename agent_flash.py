@@ -58,12 +58,34 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
     return trends[-1]
 
 
+def get_analyst_rating_score(tk: yf.Ticker) -> Tuple[float, str]:
+    try:
+        info = tk.info
+        recommendation = info.get('recommendationKey', '').lower()
+        
+        if recommendation in ['strong_buy', 'buy']:
+            return 1.0, f"Rating Analisti: {recommendation.upper()} 🟢"
+        elif recommendation in ['outperform', 'overweight']:
+            return 0.75, f"Rating Analisti: {recommendation.upper()} 🟢"
+        elif recommendation in ['hold', 'neutral']:
+            return 0.50, f"Rating Analisti: {recommendation.upper()} ⚪"
+        elif recommendation in ['underperform', 'underweight']:
+            return 0.25, f"Rating Analisti: {recommendation.upper()} 🔴"
+        elif recommendation in ['sell', 'strong_sell']:
+            return 0.0, f"Rating Analisti: {recommendation.upper()} 🔴"
+        else:
+            return 0.50, "Rating Analisti: N/D ⚪"
+    except Exception:
+        return 0.50, "Rating Analisti: N/D ⚪"
+
+
 def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[pd.DataFrame]]:
     signals = []
     extra_data = {'daily_var_pct': 0.0}
     
     ema_ma_score = 0.5
     trend_score = 0.5
+    analyst_score = 0.5
     ema_ma_delta_score = 0.5
     ha_force_score = 0.5
     ha_state_score = 0.5
@@ -83,36 +105,38 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
 
         df = df[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
 
-        # --- RECUPERO PREVIOUS CLOSE E CALCOLO VARIAZIONE % ---
-        last_price = float(df['Close'].iloc[-1])
-        prev_close = None
+        # --- FIX RIGOROSO PREZZO E VARIAZIONE INTRADAY ---
+        fast_info = getattr(tk, 'fast_info', {})
+        last_price = fast_info.get('lastPrice', None)
+        prev_close = fast_info.get('previousClose', None)
 
-        try:
-            # Tenta il recupero veloce e nativo della chiusura precedente da yfinance
-            if hasattr(tk, 'fast_info') and 'previousClose' in tk.fast_info:
-                prev_close = float(tk.fast_info['previousClose'])
-        except Exception:
-            prev_close = None
+        if last_price is None or np.isnan(last_price):
+            last_price = float(df['Close'].iloc[-1])
 
-        # Fallback al dataframe storico se fast_info fallisce o non è disponibile
+        # Controllo basato sulle date del DataFrame
+        today_date = datetime.now().date()
+        last_df_date = df.index[-1].date()
+
         if prev_close is None or np.isnan(prev_close) or prev_close <= 0:
-            if len(df) >= 2:
+            if last_df_date == today_date and len(df) >= 2:
                 prev_close = float(df['Close'].iloc[-2])
+            elif last_df_date < today_date and len(df) >= 1:
+                prev_close = float(df['Close'].iloc[-1])
             else:
                 prev_close = last_price
 
-        if prev_close > 0:
-            pct_change = ((last_price - prev_close) / prev_close) * 100.0
-        else:
-            pct_change = 0.0
+        # Sostituiamo il prezzo corrente nell'ultima riga se la sessione è di oggi
+        if last_df_date == today_date:
+            df.iloc[-1, df.columns.get_loc('Close')] = last_price
 
+        pct_change = ((last_price - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
         extra_data['daily_var_pct'] = pct_change
-        # ------------------------------------------------------
+        # ------------------------------------------------
 
         close = df['Close']
         volume = df['Volume']
 
-        # 1. EMA10 vs MA31 (18%)
+        # 1. EMA10 vs MA31 (15%)
         clean_ema, clean_ma = None, None
         if len(close) >= 32:
             ema10 = ta.trend.ema_indicator(close, window=10)
@@ -138,7 +162,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
                     signals.append(f"🔴 MA31 ({ma_now:{fmt}}) sopra EMA10 ({ema_now:{fmt}})")
                     ema_ma_score = 0.25
 
-        # 2. STIMA TREND 7 GIORNI (15%)
+        # 2. STIMA TREND 7 GIORNI (13%)
         if len(close) >= 10:
             var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
             extra_data.update({'var_percent': var_percent, 'target_price': target_price, 'stop_loss': stop_loss})
@@ -150,7 +174,11 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
             elif var_percent > -3.0: trend_score = 0.25
             else: trend_score = 0.0
 
-        # 3. DELTA % EMA10/MA31 (12%)
+        # 3. RATING ANALISTI (5%)
+        analyst_score, analyst_msg = get_analyst_rating_score(tk)
+        signals.append(f"🎯 {analyst_msg}")
+
+        # 4. DELTA % EMA10/MA31 (12%)
         if clean_ema is not None and clean_ma is not None and len(clean_ma) >= 63:
             common_idx = clean_ema.index.intersection(clean_ma.index)
             delta_series = ((clean_ema.loc[common_idx] - clean_ma.loc[common_idx]) / clean_ma.loc[common_idx]) * 100.0
@@ -165,7 +193,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
                 abs_curr = abs(curr_delta)
                 ema_ma_delta_score = 0.0 if (avg_delta_3m > 0 and abs_curr >= avg_delta_3m * 1.5) else (0.20 if abs_curr >= avg_delta_3m else 0.40)
 
-        # 4 & 5. HEIKIN ASHI (FORZA 15%, STATO 10%)
+        # 5 & 6. HEIKIN ASHI (FORZA 15%, STATO 10%)
         ha = calculate_heikin_ashi(df)
         if len(ha) >= 63:
             last_ha_close = float(ha['HA_Close'].iloc[-1])
@@ -216,13 +244,13 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
 
             signals.append(f"🕯️ Heikin Ashi: {ha_desc} - Forza Corpo: {ratio_body:.2f}x media 3M")
 
-        # 6. ZIGZAG (10%)
+        # 7. ZIGZAG (10%)
         zz_trend = calculate_zigzag_trend(df, deviation_pct=5.0)
         zigzag_score = 1.0 if zz_trend == 1 else (0.0 if zz_trend == -1 else 0.5)
         zz_desc = "Rialzista 🟢" if zz_trend == 1 else ("Ribassista 🔴" if zz_trend == -1 else "Neutro ⚪")
         signals.append(f"⚡ ZigZag (5%): Trend {zz_desc}")
 
-        # 7. VOLUME (5%)
+        # 8. VOLUME (5%)
         if len(volume) >= 63:
             avg_vol_3m = float(volume.tail(63).mean())
             curr_vol = float(volume.iloc[-1])
@@ -240,7 +268,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
                 
             signals.append(f"📊 Volumi: {curr_vol:,.0f} vs Media 3M {avg_vol_3m:,.0f} ({vol_desc})")
 
-        # 8. CHIUSURA VS PRECEDENTE (5%)
+        # 9. CHIUSURA VS PRECEDENTE (5%)
         if pct_change > 0.5: close_change_score = 1.0
         elif pct_change > 0: close_change_score = 0.75
         elif pct_change == 0: close_change_score = 0.50
@@ -250,7 +278,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
         sign_chg = "+" if pct_change > 0 else ""
         signals.append(f"💵 Variazione Chiusura: {sign_chg}{pct_change:.2f}% rispetto a ieri")
 
-        # 9. RSI (5%)
+        # 10. RSI (5%)
         if len(close) >= 15:
             rsi = ta.momentum.rsi(close, window=14).dropna()
             if not rsi.empty:
@@ -273,7 +301,7 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
                 
                 signals.append(f"🟣 RSI (14): {rsi_val:.2f} - {rsi_desc}")
 
-        # 10. MACD (5%)
+        # 11. MACD (5%)
         if len(close) >= 35:
             macd_obj = ta.trend.MACD(close=close, window_slow=26, window_fast=12, window_sign=9)
             m_line, s_line = macd_obj.macd().dropna(), macd_obj.macd_signal().dropna()
@@ -296,11 +324,19 @@ def analyze_daily_ticker(ticker: str) -> Tuple[List[str], float, Dict, Optional[
                     
                 signals.append(f"📊 MACD: {macd_desc}")
 
-        # SCORE FINALE
+        # SCORE FINALE CON NUOVE PONDERAZIONI (100% TOTALE)
         final_score = (
-            (ema_ma_score * 0.18) + (trend_score * 0.15) + (ema_ma_delta_score * 0.12) +
-            (ha_force_score * 0.15) + (ha_state_score * 0.10) + (zigzag_score * 0.10) +
-            (vol_score * 0.05) + (close_change_score * 0.05) + (rsi_score * 0.05) + (macd_score * 0.05)
+            (ema_ma_score * 0.15) + 
+            (trend_score * 0.13) + 
+            (analyst_score * 0.05) + 
+            (ema_ma_delta_score * 0.12) +
+            (ha_force_score * 0.15) + 
+            (ha_state_score * 0.10) + 
+            (zigzag_score * 0.10) +
+            (vol_score * 0.05) + 
+            (close_change_score * 0.05) + 
+            (rsi_score * 0.05) + 
+            (macd_score * 0.05)
         )
         return signals, round(max(0.0, min(1.0, final_score)), 3), extra_data, df
 
