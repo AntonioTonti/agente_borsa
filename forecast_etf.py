@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Previsioni con Google TimesFM
-Corretto per vettorizzazione 2D di TimesFM e gestione separata dei 3 messaggi Telegram.
+Gestione ottimizzata dell'alimentazione dei dati storici a TimesFM.
+Invia 3 messaggi Telegram distinti per Azioni Portafoglio, Azioni Osservate ed ETF.
 """
 
 import os
@@ -28,7 +29,7 @@ from web_generator import generate_web_page
 
 
 class TimesFMPredictor:
-    """Wrapper singleton per l'inferenza con Google TimesFM."""
+    """Wrapper per il caricamento ed inferenza con Google TimesFM."""
     _instance = None
 
     def __new__(cls):
@@ -55,41 +56,42 @@ class TimesFMPredictor:
             print(f"❌ Errore durante il caricamento del modello TimesFM: {e}")
             self.tfm = None
 
-    def predict_sequence(self, series: pd.Series, horizon: int = 5, freq_type: int = 0) -> Tuple[List[float], float]:
+    def predict_sequence(self, series: pd.Series, horizon: int = 5, freq_code: int = 0) -> Tuple[List[float], float]:
         """
-        Invia la serie temporale a TimesFM formattando correttamente i dati in un array 2D.
-        freq_type: 0 per giornaliero (daily), 1 per intraday (hourly).
+        Pulisce e prepara i dati storici scaricati per l'inferenza TimesFM.
+        freq_code: 0 per dati giornalieri, 1 per dati orari.
         """
-        if self.tfm is None or len(series) < 32:
-            return [0.0] * horizon, float(series.iloc[-1]) if not series.empty else 0.0
+        if self.tfm is None or series is None or len(series) < 16:
+            return [0.0] * horizon, 0.0
 
         try:
-            vals = series.values.astype(np.float32)
-            last_price = float(vals[-1])
-            
-            if last_price == 0:
-                return [0.0] * horizon, 0.0
+            # 1. Pulizia e conversione in array float32
+            clean_series = series.dropna().astype(np.float32)
+            if len(clean_series) < 16:
+                return [0.0] * horizon, float(clean_series.iloc[-1]) if len(clean_series) > 0 else 0.0
 
-            # 1. Normalizzazione per la stabilità del modello Transformer
-            scaled_vals = vals / last_price
+            # Prendi gli ultimi 128 punti di contesto (o tutti se < 128)
+            context_vals = clean_series.values[-128:]
+            last_price = float(context_vals[-1])
 
-            # 2. Formattazione corretta dell'input per TimesFM (Lista di array Numpy 1D)
-            input_list = [scaled_vals]
-            freq_list = [freq_type]
+            if last_price <= 0:
+                return [0.0] * horizon, last_price
 
-            # 3. Chiamata di forecast
-            forecast_tuple = self.tfm.forecast(
-                inputs=input_list,
-                freq=freq_list
+            # 2. Normalizzazione relativa per evitare l'appiattimento di TimesFM sui prezzi nominali elevati
+            scaled_input = (context_vals / last_price).astype(np.float32)
+
+            # 3. Chiamata di forecast passando le liste vettoriali
+            forecast_out, _ = self.tfm.forecast(
+                inputs=[scaled_input],
+                freq=[freq_code]
             )
-            
-            # Estrazione delle predizioni puntuali
-            forecast_matrix = forecast_tuple[0]
-            raw_preds = forecast_matrix[0][:horizon]
-            
-            # Calcolo delle variazioni percentuali rispetto all'ultimo prezzo
+
+            # Estrazione valori predetti (1D array)
+            preds_scaled = forecast_out[0][:horizon]
+
+            # 4. Calcolo delle variazioni percentuali reali
             changes_pct = []
-            for p in raw_preds:
+            for p in preds_scaled:
                 pred_price = float(p) * last_price
                 pct = ((pred_price - last_price) / last_price) * 100.0
                 changes_pct.append(pct)
@@ -97,12 +99,11 @@ class TimesFMPredictor:
             return changes_pct, last_price
 
         except Exception as e:
-            print(f"⚠️ Errore durante l'inferenza TimesFM: {e}")
+            print(f"⚠️ Errore inferenza TimesFM: {e}")
             return [0.0] * horizon, float(series.iloc[-1]) if not series.empty else 0.0
 
 
 def get_status_circle(change_pct: float, threshold: float = 0.15) -> str:
-    """Riconosce trend positivi, negativi o neutri con soglie per micro-movimenti."""
     if change_pct >= threshold:
         return "🟢"
     elif change_pct <= -threshold:
@@ -120,8 +121,8 @@ def analyze_instrument_timesfm(ticker: str, predictor: TimesFMPredictor) -> Tupl
     try:
         tk = yf.Ticker(ticker)
 
-        # 1. Previsione Daily (1D..5D) - freq=0
-        df_d = tk.history(period="6mo", interval="1d", auto_adjust=True)
+        # 1. Download e Previsione Daily (1D..5D)
+        df_d = tk.history(period="1y", interval="1d", auto_adjust=True)
         if not df_d.empty and len(df_d) >= DAILY_MIN_POINTS:
             df_d = df_d[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
             
@@ -130,18 +131,18 @@ def analyze_instrument_timesfm(ticker: str, predictor: TimesFMPredictor) -> Tupl
             prev_close = fast_info.get('previousClose', float(df_d['Close'].iloc[-2] if len(df_d) >= 2 else last_price))
             var_today_pct = ((last_price - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
 
-            daily_changes, _ = predictor.predict_sequence(df_d['Close'], horizon=5, freq_type=0)
+            daily_changes, _ = predictor.predict_sequence(df_d['Close'], horizon=5, freq_code=0)
 
-        # 2. Previsione Intraday (1H..5H) - freq=1
+        # 2. Download e Previsione Intraday (1H..5H)
         df_h = tk.history(period="1mo", interval="1h", auto_adjust=True)
-        if not df_h.empty and len(df_h) >= 32:
+        if not df_h.empty and len(df_h) >= 16:
             df_h = df_h[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-            hourly_changes, _ = predictor.predict_sequence(df_h['Close'], horizon=5, freq_type=1)
+            hourly_changes, _ = predictor.predict_sequence(df_h['Close'], horizon=5, freq_code=1)
 
         return hourly_changes, daily_changes, var_today_pct, last_price, df_d
 
     except Exception as e:
-        print(f"❌ Errore durante l'analisi per {ticker}: {e}")
+        print(f"❌ Errore scaricamento/analisi per {ticker}: {e}")
         return hourly_changes, daily_changes, var_today_pct, last_price, None
 
 
@@ -161,11 +162,11 @@ def format_message_block(
 
         header = f"🔹 [{ticker}]({url}) - {desc} ({sign}{var_today:.2f}%)"
         
-        # Segmentazione stringa Daily (1D..5D)
+        # Formattazione Daily (1D..5D)
         d_str = " ".join([f"{get_status_circle(ch, 0.20)}{ch:+.1f}%" for ch in d_changes])
         daily_line = f"├ 📈 *1D-5D Daily:* {d_str}"
         
-        # Segmentazione stringa Intraday (1H..5H)
+        # Formattazione Intraday (1H..5H)
         h_str = " ".join([f"{get_status_circle(ch, 0.10)}{ch:+.1f}%" for ch in h_changes])
         hourly_line = f"└ ⚡ *1H-5H Intraday:* {h_str}\n"
 
@@ -200,10 +201,10 @@ def main():
 
     predictor = TimesFMPredictor()
 
-    # Caricamento delle liste dal modulo config
+    # Caricamento delle liste
     portafoglio_titoli, osservati_titoli, descriptions = load_titoli_csv()
     
-    # Classificazione automatica Ticker per suddivisione in 3 liste
+    # Classificazione per suddivisione esplicita in 3 liste
     etf_keywords = ["ETF", "ISHARES", "XTRACKERS", "LYXOR", "VANGUARD", "AMUNDI", "WISDOMTREE", "XEON", "SWDA", "MEUD", "CSSPX", "SGLD"]
     
     portafoglio_azioni = []
@@ -241,12 +242,12 @@ def main():
             time.sleep(0.1)
         return results
 
-    # Processa i 3 flussi distinti
+    # Processa separatamente i 3 flussi
     res_portafoglio = process_group(portafoglio_azioni, "AZIONI PORTAFOGLIO")
     res_osservati = process_group(osservati_azioni, "AZIONI OSSERVATE")
     res_etf = process_group(lista_etf, "ETF")
 
-    # Invio Telegram in 3 Messaggi separati
+    # Invio Telegram in 3 Messaggi ben distinti
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
