@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Previsioni ETF e Azioni
-Implementa un calcolo solido sui rendimenti storici e projettori sequenziali.
-Invia 3 messaggi distinti: Portafoglio Azioni, Azioni Osservate, ETF.
+- Ordinamento per variazione percentuale del giorno (decrescente).
+- Riconoscimento esplicito della colonna 'tipo' == 'ETF' dal CSV.
+- Invio di 3 messaggi ben distinti su Telegram.
 """
 
 import os
@@ -23,11 +24,7 @@ from web_generator import generate_web_page
 
 
 def calculate_forecast_sequence(series: pd.Series, horizon: int = 5) -> List[float]:
-    """
-    Calcola la proiezione dei rendimenti futuri basandosi sui momentum percentuali 
-    e sulla stima della deriva (drift) degli ultimi periodi.
-    Garantisce variazioni dinamiche e non nulle.
-    """
+    """Calcola la proiezione sequenziale basata sul momentum e deriva recente."""
     if series is None or len(series) < 10:
         return [0.0] * horizon
 
@@ -35,22 +32,17 @@ def calculate_forecast_sequence(series: pd.Series, horizon: int = 5) -> List[flo
     if len(vals) < 10:
         return [0.0] * horizon
 
-    # Calcolo dei rendimenti percentuali recenti
     pct_returns = np.diff(vals) / vals[:-1] * 100.0
 
-    # Trend recente (media ponderata degli ultimi rendimenti)
     weights = np.exp(np.linspace(-1, 0, len(pct_returns)))
     weights /= weights.sum()
     
     mean_return = np.sum(pct_returns * weights)
-    volatility = np.std(pct_returns) if len(pct_returns) > 1 else 0.1
 
-    # Generazione sequenza futura con decadimento del momentum
     forecast_pcts = []
     current_cum = 0.0
     
     for i in range(1, horizon + 1):
-        # Il momentum si smorza leggermente verso la media col passare del tempo
         decay = 0.85 ** (i - 1)
         step_return = mean_return * decay
         current_cum += step_return
@@ -110,9 +102,12 @@ def format_message_block(
     if not results:
         return f"{title} ({now_rome})\nNessun elemento presente."
 
+    # Ordina i risultati per variazione % odierna decrescente (dal più alto al più basso)
+    sorted_results = sorted(results, key=lambda x: x[4], reverse=True)
+
     lines = [f"{title} ({now_rome})\n"]
 
-    for ticker, desc, h_changes, d_changes, var_today in results:
+    for ticker, desc, h_changes, d_changes, var_today in sorted_results:
         sign = "+" if var_today > 0 else ""
         url = f"https://antoniotonti.github.io/agente_borsa/forecast_etf/{ticker}.html"
 
@@ -149,34 +144,33 @@ def main():
     start_time = time.time()
     now_str = datetime.now(ZoneInfo("Europe/Rome")).strftime('%d/%m/%Y %H:%M:%S')
     print("=" * 60)
-    print("🤖 AGENTE TRADING - FORECAST (ALGORITMO DINAMICO DI PROIEZIONE)")
+    print("🤖 AGENTE TRADING - FORECAST")
     print(f"Avvio: {now_str}")
     print("=" * 60)
 
-    # Caricamento delle liste
-    portafoglio_titoli, osservati_titoli, descriptions = load_titoli_csv()
-    
-    # Classificazione per la suddivisione esplicita nei 3 canali
-    etf_keywords = ["ETF", "ISHARES", "XTRACKERS", "LYXOR", "VANGUARD", "AMUNDI", "WISDOMTREE", "XEON", "SWDA", "MEUD", "CSSPX", "SGLD"]
+    # Legge il CSV compresi i dettagli dei tipi
+    df_csv = pd.read_csv('titoli.csv')
     
     portafoglio_azioni = []
     osservati_azioni = []
     lista_etf = []
+    descriptions = {}
 
-    for t in portafoglio_titoli:
-        desc = descriptions.get(t, "").upper()
-        if any(kw in desc or kw in t.upper() for kw in etf_keywords):
-            lista_etf.append(t)
-        else:
-            portafoglio_azioni.append(t)
+    etf_keywords = ["ETF", "ISHARES", "XTRACKERS", "LYXOR", "VANGUARD", "AMUNDI", "WISDOMTREE", "XEON", "SWDA", "MEUD", "CSSPX", "SGLD"]
 
-    for t in osservati_titoli:
-        desc = descriptions.get(t, "").upper()
-        if any(kw in desc or kw in t.upper() for kw in etf_keywords):
-            if t not in lista_etf:
-                lista_etf.append(t)
-        else:
-            osservati_azioni.append(t)
+    for _, row in df_csv.iterrows():
+        ticker = str(row['codice']).strip()
+        tipo = str(row['tipo']).strip().upper()
+        desc = str(row['descrizione']).strip()
+        descriptions[ticker] = desc
+
+        # Controllo se è ETF dal campo 'tipo' o dalla descrizione/ticker
+        if tipo == "ETF" or any(kw in desc.upper() or kw in ticker.upper() for kw in etf_keywords):
+            lista_etf.append(ticker)
+        elif tipo == "PORTAFOGLIO":
+            portafoglio_azioni.append(ticker)
+        else:  # WATCHLIST / OSSERVATI
+            osservati_azioni.append(ticker)
 
     def process_group(tickers: List[str], group_name: str):
         results = []
@@ -199,7 +193,7 @@ def main():
     res_osservati = process_group(osservati_azioni, "AZIONI OSSERVATE")
     res_etf = process_group(lista_etf, "ETF")
 
-    # Invio Telegram in 3 Messaggi ben distinti
+    # Invio Telegram nei 3 messaggi
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
