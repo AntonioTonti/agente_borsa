@@ -2,9 +2,8 @@ name: Forecast ETF Agent (Google TimesFM)
 
 on:
   schedule:
-    # Esecuzione dal lunedì al venerdì alle 08:30 e alle 17:30 UTC
     - cron: '30 8,17 * * 1-5'
-  workflow_dispatch: # Permette l'avvio manuale dalla scheda Actions di GitHub
+  workflow_dispatch:
 
 jobs:
   run-forecast-etf:
