@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Agente di Trading - Previsioni ETF con Google TimesFM (FORECAST_ETF)
-Corretto per fuso orario italiano (Europe/Rome) e vettorizzazione TimesFM.
+Agente di Trading - Previsioni con Google TimesFM
+Gestione corretta dell'inferenza TimesFM e invio di 3 messaggi distinti su Telegram:
+1. Azioni Portafoglio
+2. Azioni Osservate
+3. ETF
 """
 
 import os
@@ -9,14 +12,13 @@ import sys
 import time
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from zoneinfo import ZoneInfo
 
-# Importazione TimesFM di Google
 try:
     import timesfm
 except ImportError:
@@ -29,7 +31,7 @@ from web_generator import generate_web_page
 
 
 class TimesFMPredictor:
-    """Wrapper singleton per il caricamento e l'inferenza del modello Google TimesFM."""
+    """Wrapper singleton per il caricamento e l'inferenza di Google TimesFM."""
     _instance = None
 
     def __new__(cls):
@@ -39,7 +41,7 @@ class TimesFMPredictor:
         return cls._instance
 
     def _init_model(self):
-        print("🤖 Caricamento modello Google TimesFM in corso...")
+        print("🤖 Caricamento modello Google TimesFM...")
         try:
             self.tfm = timesfm.TimesFm(
                 context_len=128,
@@ -58,8 +60,8 @@ class TimesFMPredictor:
 
     def predict_sequence(self, series: pd.Series, horizon: int = 5, freq: int = 0) -> Tuple[List[float], float]:
         """
-        Genera le previsioni per i successivi 'horizon' step temporali.
-        freq: 0 per dati giornalieri, 1 per dati orari.
+        Calcola la previsione percentuale sequenziale.
+        Esegue la normalizzazione (scaling) per garantire che TimesFM restituisca delta reali.
         """
         if self.tfm is None or len(series) < 32:
             return [0.0] * horizon, float(series.iloc[-1]) if not series.empty else 0.0
@@ -67,28 +69,33 @@ class TimesFMPredictor:
         try:
             vals = series.values.astype(np.float32)
             last_price = float(vals[-1])
+            
+            if last_price == 0:
+                return [0.0] * horizon, 0.0
 
-            # Inizializzazione input vettoriale per TimesFM
-            forecast_df = self.tfm.forecast(
-                inputs=[vals],
+            # Normalizzazione per stabilità dell'inferenza Transformer
+            scaled_input = vals / last_price
+
+            # Call a TimesFM forecast
+            forecast_out, _ = self.tfm.forecast(
+                inputs=[scaled_input],
                 freq=[freq]
             )
             
-            # Estrazione array delle previsioni puntuali
-            if isinstance(forecast_df, tuple):
-                preds = forecast_df[0][0][:horizon]
-            else:
-                preds = forecast_df[0][:horizon]
-
+            # Estrazione previsione scalata
+            raw_preds = forecast_out[0][:horizon]
+            
+            # Ricostruzione prezzi previsti e % variazioni
             changes_pct = []
-            for p in preds:
-                pred_val = float(p)
-                pct = ((pred_val - last_price) / last_price) * 100.0
+            for p in raw_preds:
+                pred_price = float(p) * last_price
+                pct = ((pred_price - last_price) / last_price) * 100.0
                 changes_pct.append(pct)
 
             return changes_pct, last_price
+
         except Exception as e:
-            print(f"⚠️ Errore durante l'inferenza TimesFM: {e}")
+            print(f"⚠️ Errore inferenza TimesFM: {e}")
             return [0.0] * horizon, float(series.iloc[-1]) if not series.empty else 0.0
 
 
@@ -101,7 +108,7 @@ def get_status_circle(change_pct: float, threshold: float = 0.2) -> str:
         return "⚪"
 
 
-def analyze_etf_timesfm(ticker: str, predictor: TimesFMPredictor) -> Tuple[List[float], List[float], float, float, Optional[pd.DataFrame]]:
+def analyze_instrument_timesfm(ticker: str, predictor: TimesFMPredictor) -> Tuple[List[float], List[float], float, float, Optional[pd.DataFrame]]:
     hourly_changes = [0.0] * 5
     daily_changes = [0.0] * 5
     var_today_pct = 0.0
@@ -110,7 +117,7 @@ def analyze_etf_timesfm(ticker: str, predictor: TimesFMPredictor) -> Tuple[List[
     try:
         tk = yf.Ticker(ticker)
 
-        # 1. Previsione Daily (1D..5D)
+        # 1. Previsione Daily (1D..5D) - freq=0
         df_d = tk.history(period="6mo", interval="1d", auto_adjust=True)
         if not df_d.empty and len(df_d) >= DAILY_MIN_POINTS:
             df_d = df_d[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
@@ -122,7 +129,7 @@ def analyze_etf_timesfm(ticker: str, predictor: TimesFMPredictor) -> Tuple[List[
 
             daily_changes, _ = predictor.predict_sequence(df_d['Close'], horizon=5, freq=0)
 
-        # 2. Previsione Intraday (1H..5H)
+        # 2. Previsione Intraday (1H..5H) - freq=1
         df_h = tk.history(period="1mo", interval="1h", auto_adjust=True)
         if not df_h.empty and len(df_h) >= 32:
             df_h = df_h[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
@@ -131,18 +138,17 @@ def analyze_etf_timesfm(ticker: str, predictor: TimesFMPredictor) -> Tuple[List[
         return hourly_changes, daily_changes, var_today_pct, last_price, df_d
 
     except Exception as e:
-        print(f"❌ Errore durante l'analisi TimesFM per {ticker}: {e}")
+        print(f"❌ Errore durante l'analisi per {ticker}: {e}")
         return hourly_changes, daily_changes, var_today_pct, last_price, None
 
 
-def format_etf_message_block(
+def format_message_block(
     title: str, 
     results: List[Tuple[str, str, List[float], List[float], float]]
 ) -> str:
-    # Gestione Orario con fuso italiano Europe/Rome
     now_rome = datetime.now(ZoneInfo("Europe/Rome")).strftime("%H:%M")
     if not results:
-        return f"{title} ({now_rome})\nNessun elemento disponibile."
+        return f"{title} ({now_rome})\nNessun elemento presente."
 
     lines = [f"{title} ({now_rome})\n"]
 
@@ -151,9 +157,12 @@ def format_etf_message_block(
         url = f"https://antoniotonti.github.io/agente_borsa/forecast_etf/{ticker}.html"
 
         header = f"🔹 [{ticker}]({url}) - {desc} ({sign}{var_today:.2f}%)"
-        d_str = " ".join([f"{get_status_circle(ch, 0.3)}{ch:+.1f}%" for ch in d_changes])
+        
+        # Soglia dinamica per evidenziare sia i micro-movimenti che le tendenze
+        d_str = " ".join([f"{get_status_circle(ch, 0.2)}{ch:+.1f}%" for ch in d_changes])
         daily_line = f"├ 📈 *1D-5D Daily:* {d_str}"
-        h_str = " ".join([f"{get_status_circle(ch, 0.15)}{ch:+.1f}%" for ch in h_changes])
+        
+        h_str = " ".join([f"{get_status_circle(ch, 0.1)}{ch:+.1f}%" for ch in h_changes])
         hourly_line = f"└ ⚡ *1H-5H Intraday:* {h_str}\n"
 
         lines.extend([header, daily_line, hourly_line])
@@ -181,59 +190,81 @@ def main():
     start_time = time.time()
     now_str = datetime.now(ZoneInfo("Europe/Rome")).strftime('%d/%m/%Y %H:%M:%S')
     print("=" * 60)
-    print("🤖 AGENTE TRADING - FORECAST ETF (GOOGLE TIMESFM)")
+    print("🤖 AGENTE TRADING - FORECAST (GOOGLE TIMESFM)")
     print(f"Avvio: {now_str}")
     print("=" * 60)
 
     predictor = TimesFMPredictor()
 
-    # Carica la lista titoli/ETF
-    portfolio_titoli, watchlist_titoli, descriptions = load_titoli_csv()
+    # Caricamento delle liste
+    portafoglio_titoli, osservati_titoli, descriptions = load_titoli_csv()
+    
+    # Riconoscimento/Separazione Ticker ETF vs Azioni
+    etf_keywords = ["ETF", "ISHARES", "XTRACKERS", "LYXOR", "VANGUARD", "AMUNDI", "WISDOMTREE", "XEON.MI", "SWDA.MI", "MEUD.MI", "CSSPX.MI"]
+    
+    portafoglio_azioni = []
+    osservati_azioni = []
+    lista_etf = []
 
-    # Filtra o seleziona gli strumenti per l'analisi
-    portfolio_results = []
-    if portfolio_titoli:
-        print("\n💰 ANALISI PORTAFOGLIO")
-        for ticker in portfolio_titoli:
-            h_ch, d_ch, var_pct, price, df_d = analyze_etf_timesfm(ticker, predictor)
+    for t in portafoglio_titoli:
+        desc = descriptions.get(t, "").upper()
+        if any(kw in desc or kw in t for kw in etf_keywords):
+            lista_etf.append(t)
+        else:
+            portafoglio_azioni.append(t)
+
+    for t in osservati_titoli:
+        desc = descriptions.get(t, "").upper()
+        if any(kw in desc or kw in t for kw in etf_keywords):
+            if t not in lista_etf:
+                lista_etf.append(t)
+        else:
+            osservati_azioni.append(t)
+
+    def process_group(tickers: List[str], group_name: str):
+        results = []
+        if not tickers:
+            return results
+        print(f"\n--- Elaborazione {group_name} ---")
+        for ticker in tickers:
+            h_ch, d_ch, var_pct, price, df_d = analyze_instrument_timesfm(ticker, predictor)
             desc = descriptions.get(ticker, ticker)
-            portfolio_results.append((ticker, desc, h_ch, d_ch, var_pct))
+            results.append((ticker, desc, h_ch, d_ch, var_pct))
             
             if df_d is not None and not df_d.empty:
                 score_d = round(0.50 + (d_ch[-1] / 6.0), 3) if len(d_ch) > 0 else 0.5
                 generate_web_page(ticker, desc, "forecast_etf", df_d, score_d, [f"TimesFM 5D: {d_ch[-1]:+.2f}%"])
-            time.sleep(0.2)
+            time.sleep(0.1)
+        return results
 
-    watchlist_results = []
-    if watchlist_titoli:
-        print("\n👁️ ANALISI WATCHLIST")
-        for ticker in watchlist_titoli:
-            h_ch, d_ch, var_pct, price, df_d = analyze_etf_timesfm(ticker, predictor)
-            desc = descriptions.get(ticker, ticker)
-            watchlist_results.append((ticker, desc, h_ch, d_ch, var_pct))
-            
-            if df_d is not None and not df_d.empty:
-                score_d = round(0.50 + (d_ch[-1] / 6.0), 3) if len(d_ch) > 0 else 0.5
-                generate_web_page(ticker, desc, "forecast_etf", df_d, score_d, [f"TimesFM 5D: {d_ch[-1]:+.2f}%"])
-            time.sleep(0.2)
+    # Elaborazione dei 3 gruppi ben distinti
+    res_portafoglio = process_group(portafoglio_azioni, "AZIONI PORTAFOGLIO")
+    res_osservati = process_group(osservati_azioni, "AZIONI OSSERVATE")
+    res_etf = process_group(lista_etf, "ETF")
 
-    # Invio messaggi separati
+    # Invio dei 3 Messaggi Telegram Separati
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
     if token and chat_id:
-        if portfolio_results:
-            msg_port = format_etf_message_block("📊 *FORECAST ETF PORTAFOGLIO*", portfolio_results)
-            print("\n📩 Invio Telegram Portafoglio...")
-            send_telegram_message(token, chat_id, msg_port)
+        if res_portafoglio:
+            print("\n📩 Invio Telegram 1/3: Azioni Portafoglio...")
+            msg = format_message_block("📊 *FORECAST AZIONI PORTAFOGLIO*", res_portafoglio)
+            send_telegram_message(token, chat_id, msg)
             time.sleep(1.5)
 
-        if watchlist_results:
-            msg_watch = format_etf_message_block("👁️ *FORECAST ETF OSSERVATI*", watchlist_results)
-            print("\n📩 Invio Telegram Osservati...")
-            send_telegram_message(token, chat_id, msg_watch)
+        if res_osservati:
+            print("📩 Invio Telegram 2/3: Azioni Osservate...")
+            msg = format_message_block("👁️ *FORECAST AZIONI OSSERVATI*", res_osservati)
+            send_telegram_message(token, chat_id, msg)
+            time.sleep(1.5)
 
-    print(f"\n🏁 Completato in {time.time() - start_time:.1f}s")
+        if res_etf:
+            print("📩 Invio Telegram 3/3: ETF...")
+            msg = format_message_block("💰 *FORECAST ETF*", res_etf)
+            send_telegram_message(token, chat_id, msg)
+
+    print(f"\n🏁 Completato con successo in {time.time() - start_time:.1f}s")
 
 
 if __name__ == "__main__":
