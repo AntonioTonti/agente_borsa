@@ -26,7 +26,7 @@ except ImportError:
     sys.exit(1)
 
 sys.path.append('.')
-from config import load_etf_csv, load_titoli_csv, DAILY_MIN_POINTS
+from config import load_titoli_csv, DAILY_MIN_POINTS
 from web_generator import generate_web_page
 
 
@@ -59,12 +59,6 @@ class TimesFMPredictor:
             self.tfm = None
 
     def predict_sequence(self, series: pd.Series, horizon: int = 5) -> Tuple[List[float], float]:
-        """
-        Calcola le variazioni percentuali previste dal modello TimesFM per gli step 1..horizon.
-        Restituisce:
-        - List[float]: variazioni % rispetto all'ultimo prezzo noto
-        - float: ultimo prezzo noto
-        """
         if self.tfm is None or len(series) < 32:
             return [0.0] * horizon, float(series.iloc[-1]) if not series.empty else 0.0
 
@@ -83,7 +77,6 @@ class TimesFMPredictor:
 
 
 def get_status_circle(change_pct: float, threshold: float = 0.3) -> str:
-    """Restituisce il pallino verde, bianco o rosso in base alla % di variazione prevista."""
     if change_pct >= threshold:
         return "🟢"
     elif change_pct <= -threshold:
@@ -93,9 +86,6 @@ def get_status_circle(change_pct: float, threshold: float = 0.3) -> str:
 
 
 def analyze_etf_timesfm(ticker: str, predictor: TimesFMPredictor) -> Tuple[List[float], List[float], float, float, Optional[pd.DataFrame]]:
-    """
-    Analizza l'ETF ed esegue la previsione sequenziale per 1H..5H e 1D..5D.
-    """
     hourly_changes = [0.0] * 5
     daily_changes = [0.0] * 5
     var_today_pct = 0.0
@@ -133,9 +123,6 @@ def format_etf_message_block(
     title: str, 
     results: List[Tuple[str, str, List[float], List[float], float]]
 ) -> str:
-    """
-    Formatta il messaggio Telegram con la struttura a righe richieste.
-    """
     now_str = datetime.now().strftime("%H:%M")
     if not results:
         return f"{title} ({now_str})\nNessun ETF disponibile."
@@ -146,14 +133,9 @@ def format_etf_message_block(
         sign = "+" if var_today > 0 else ""
         url = f"https://antoniotonti.github.io/agente_borsa/forecast_etf/{ticker}.html"
 
-        # Intestazione ETF
         header = f"🔹 [{ticker}]({url}) - {desc} ({sign}{var_today:.2f}%)"
-
-        # Prima riga: 1D..5D Daily
         d_str = " ".join([f"{get_status_circle(ch, 0.5)}{ch:+.1f}%" for ch in d_changes])
         daily_line = f"├ 📈 *1D-5D Daily:* {d_str}"
-
-        # Seconda riga: 1H..5H Intraday
         h_str = " ".join([f"{get_status_circle(ch, 0.3)}{ch:+.1f}%" for ch in h_changes])
         hourly_line = f"└ ⚡ *1H-5H Intraday:* {h_str}\n"
 
@@ -187,11 +169,8 @@ def main():
 
     predictor = TimesFMPredictor()
 
-    # Tenta prima di caricare la lista separata ETF, altrimenti fallback
-    try:
-        portfolio_etf, watchlist_etf, descriptions = load_etf_csv()
-    except Exception:
-        portfolio_etf, watchlist_etf, descriptions = load_titoli_csv()
+    # Carica la lista titoli/ETF dal modulo config
+    portfolio_etf, watchlist_etf, descriptions = load_titoli_csv()
 
     # Processa Portafoglio ETF
     portfolio_results = []
@@ -221,7 +200,7 @@ def main():
                 generate_web_page(ticker, desc, "forecast_etf", df_d, score_d, [f"TimesFM 5D: {d_ch[-1]:+.2f}%"])
             time.sleep(0.2)
 
-    # Invio Telegram (separato)
+    # Invio Telegram
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
