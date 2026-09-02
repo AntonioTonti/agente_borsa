@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Previsioni con Google TimesFM
-Gestione corretta dell'inferenza TimesFM e invio di 3 messaggi distinti su Telegram:
-1. Azioni Portafoglio
-2. Azioni Osservate
-3. ETF
+Corretto per vettorizzazione 2D di TimesFM e gestione separata dei 3 messaggi Telegram.
 """
 
 import os
@@ -31,7 +28,7 @@ from web_generator import generate_web_page
 
 
 class TimesFMPredictor:
-    """Wrapper singleton per il caricamento e l'inferenza di Google TimesFM."""
+    """Wrapper singleton per l'inferenza con Google TimesFM."""
     _instance = None
 
     def __new__(cls):
@@ -58,10 +55,10 @@ class TimesFMPredictor:
             print(f"❌ Errore durante il caricamento del modello TimesFM: {e}")
             self.tfm = None
 
-    def predict_sequence(self, series: pd.Series, horizon: int = 5, freq: int = 0) -> Tuple[List[float], float]:
+    def predict_sequence(self, series: pd.Series, horizon: int = 5, freq_type: int = 0) -> Tuple[List[float], float]:
         """
-        Calcola la previsione percentuale sequenziale.
-        Esegue la normalizzazione (scaling) per garantire che TimesFM restituisca delta reali.
+        Invia la serie temporale a TimesFM formattando correttamente i dati in un array 2D.
+        freq_type: 0 per giornaliero (daily), 1 per intraday (hourly).
         """
         if self.tfm is None or len(series) < 32:
             return [0.0] * horizon, float(series.iloc[-1]) if not series.empty else 0.0
@@ -73,19 +70,24 @@ class TimesFMPredictor:
             if last_price == 0:
                 return [0.0] * horizon, 0.0
 
-            # Normalizzazione per stabilità dell'inferenza Transformer
-            scaled_input = vals / last_price
+            # 1. Normalizzazione per la stabilità del modello Transformer
+            scaled_vals = vals / last_price
 
-            # Call a TimesFM forecast
-            forecast_out, _ = self.tfm.forecast(
-                inputs=[scaled_input],
-                freq=[freq]
+            # 2. Formattazione corretta dell'input per TimesFM (Lista di array Numpy 1D)
+            input_list = [scaled_vals]
+            freq_list = [freq_type]
+
+            # 3. Chiamata di forecast
+            forecast_tuple = self.tfm.forecast(
+                inputs=input_list,
+                freq=freq_list
             )
             
-            # Estrazione previsione scalata
-            raw_preds = forecast_out[0][:horizon]
+            # Estrazione delle predizioni puntuali
+            forecast_matrix = forecast_tuple[0]
+            raw_preds = forecast_matrix[0][:horizon]
             
-            # Ricostruzione prezzi previsti e % variazioni
+            # Calcolo delle variazioni percentuali rispetto all'ultimo prezzo
             changes_pct = []
             for p in raw_preds:
                 pred_price = float(p) * last_price
@@ -95,11 +97,12 @@ class TimesFMPredictor:
             return changes_pct, last_price
 
         except Exception as e:
-            print(f"⚠️ Errore inferenza TimesFM: {e}")
+            print(f"⚠️ Errore durante l'inferenza TimesFM: {e}")
             return [0.0] * horizon, float(series.iloc[-1]) if not series.empty else 0.0
 
 
-def get_status_circle(change_pct: float, threshold: float = 0.2) -> str:
+def get_status_circle(change_pct: float, threshold: float = 0.15) -> str:
+    """Riconosce trend positivi, negativi o neutri con soglie per micro-movimenti."""
     if change_pct >= threshold:
         return "🟢"
     elif change_pct <= -threshold:
@@ -127,13 +130,13 @@ def analyze_instrument_timesfm(ticker: str, predictor: TimesFMPredictor) -> Tupl
             prev_close = fast_info.get('previousClose', float(df_d['Close'].iloc[-2] if len(df_d) >= 2 else last_price))
             var_today_pct = ((last_price - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
 
-            daily_changes, _ = predictor.predict_sequence(df_d['Close'], horizon=5, freq=0)
+            daily_changes, _ = predictor.predict_sequence(df_d['Close'], horizon=5, freq_type=0)
 
         # 2. Previsione Intraday (1H..5H) - freq=1
         df_h = tk.history(period="1mo", interval="1h", auto_adjust=True)
         if not df_h.empty and len(df_h) >= 32:
             df_h = df_h[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-            hourly_changes, _ = predictor.predict_sequence(df_h['Close'], horizon=5, freq=1)
+            hourly_changes, _ = predictor.predict_sequence(df_h['Close'], horizon=5, freq_type=1)
 
         return hourly_changes, daily_changes, var_today_pct, last_price, df_d
 
@@ -158,11 +161,12 @@ def format_message_block(
 
         header = f"🔹 [{ticker}]({url}) - {desc} ({sign}{var_today:.2f}%)"
         
-        # Soglia dinamica per evidenziare sia i micro-movimenti che le tendenze
-        d_str = " ".join([f"{get_status_circle(ch, 0.2)}{ch:+.1f}%" for ch in d_changes])
+        # Segmentazione stringa Daily (1D..5D)
+        d_str = " ".join([f"{get_status_circle(ch, 0.20)}{ch:+.1f}%" for ch in d_changes])
         daily_line = f"├ 📈 *1D-5D Daily:* {d_str}"
         
-        h_str = " ".join([f"{get_status_circle(ch, 0.1)}{ch:+.1f}%" for ch in h_changes])
+        # Segmentazione stringa Intraday (1H..5H)
+        h_str = " ".join([f"{get_status_circle(ch, 0.10)}{ch:+.1f}%" for ch in h_changes])
         hourly_line = f"└ ⚡ *1H-5H Intraday:* {h_str}\n"
 
         lines.extend([header, daily_line, hourly_line])
@@ -196,11 +200,11 @@ def main():
 
     predictor = TimesFMPredictor()
 
-    # Caricamento delle liste
+    # Caricamento delle liste dal modulo config
     portafoglio_titoli, osservati_titoli, descriptions = load_titoli_csv()
     
-    # Riconoscimento/Separazione Ticker ETF vs Azioni
-    etf_keywords = ["ETF", "ISHARES", "XTRACKERS", "LYXOR", "VANGUARD", "AMUNDI", "WISDOMTREE", "XEON.MI", "SWDA.MI", "MEUD.MI", "CSSPX.MI"]
+    # Classificazione automatica Ticker per suddivisione in 3 liste
+    etf_keywords = ["ETF", "ISHARES", "XTRACKERS", "LYXOR", "VANGUARD", "AMUNDI", "WISDOMTREE", "XEON", "SWDA", "MEUD", "CSSPX", "SGLD"]
     
     portafoglio_azioni = []
     osservati_azioni = []
@@ -208,14 +212,14 @@ def main():
 
     for t in portafoglio_titoli:
         desc = descriptions.get(t, "").upper()
-        if any(kw in desc or kw in t for kw in etf_keywords):
+        if any(kw in desc or kw in t.upper() for kw in etf_keywords):
             lista_etf.append(t)
         else:
             portafoglio_azioni.append(t)
 
     for t in osservati_titoli:
         desc = descriptions.get(t, "").upper()
-        if any(kw in desc or kw in t for kw in etf_keywords):
+        if any(kw in desc or kw in t.upper() for kw in etf_keywords):
             if t not in lista_etf:
                 lista_etf.append(t)
         else:
@@ -225,7 +229,7 @@ def main():
         results = []
         if not tickers:
             return results
-        print(f"\n--- Elaborazione {group_name} ---")
+        print(f"\n--- Elaborazione {group_name} ({len(tickers)} strumenti) ---")
         for ticker in tickers:
             h_ch, d_ch, var_pct, price, df_d = analyze_instrument_timesfm(ticker, predictor)
             desc = descriptions.get(ticker, ticker)
@@ -237,32 +241,32 @@ def main():
             time.sleep(0.1)
         return results
 
-    # Elaborazione dei 3 gruppi ben distinti
+    # Processa i 3 flussi distinti
     res_portafoglio = process_group(portafoglio_azioni, "AZIONI PORTAFOGLIO")
     res_osservati = process_group(osservati_azioni, "AZIONI OSSERVATE")
     res_etf = process_group(lista_etf, "ETF")
 
-    # Invio dei 3 Messaggi Telegram Separati
+    # Invio Telegram in 3 Messaggi separati
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
     if token and chat_id:
         if res_portafoglio:
             print("\n📩 Invio Telegram 1/3: Azioni Portafoglio...")
-            msg = format_message_block("📊 *FORECAST AZIONI PORTAFOGLIO*", res_portafoglio)
-            send_telegram_message(token, chat_id, msg)
+            msg1 = format_message_block("📊 *FORECAST AZIONI PORTAFOGLIO*", res_portafoglio)
+            send_telegram_message(token, chat_id, msg1)
             time.sleep(1.5)
 
         if res_osservati:
             print("📩 Invio Telegram 2/3: Azioni Osservate...")
-            msg = format_message_block("👁️ *FORECAST AZIONI OSSERVATI*", res_osservati)
-            send_telegram_message(token, chat_id, msg)
+            msg2 = format_message_block("👁️ *FORECAST AZIONI OSSERVATI*", res_osservati)
+            send_telegram_message(token, chat_id, msg2)
             time.sleep(1.5)
 
         if res_etf:
             print("📩 Invio Telegram 3/3: ETF...")
-            msg = format_message_block("💰 *FORECAST ETF*", res_etf)
-            send_telegram_message(token, chat_id, msg)
+            msg3 = format_message_block("💰 *FORECAST ETF*", res_etf)
+            send_telegram_message(token, chat_id, msg3)
 
     print(f"\n🏁 Completato con successo in {time.time() - start_time:.1f}s")
 
