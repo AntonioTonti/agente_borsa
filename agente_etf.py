@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Agente ETF - Analisi Multi-Timeframe (1H + 1D) per ETF a Leva / Direzionali
-- Timeframe 1H: Operativo Intraday (per ridurre al minimo il decadimento/decay)
+- Timeframe 1H: Operativo Intraday
 - Timeframe 1D: Filtro di Trend di Fondo
-- Variazione %: Calcolata rispetto alla chiusura del giorno prima (previousClose)
+- Pesi Dinamici e Gestione del Rischio Integrati
 - Telegram: Report unico orario sintetico
 """
 
@@ -11,7 +11,7 @@ import os
 import sys
 import time
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 
 import requests
 import yfinance as yf
@@ -20,12 +20,19 @@ import numpy as np
 import ta
 
 sys.path.append('.')
-from analysis_utils import calculate_heikin_ashi, get_bullet, calculate_trend_estimate, format_trend_line
+from analysis_utils import calculate_heikin_ashi, get_bullet
 from web_generator import generate_web_page
+
+# Nuove importazioni per l'architettura dinamica
+try:
+    import state_manager
+    from risk_manager import apply_risk_limits, calculate_dynamic_weights
+except ImportError:
+    print("⚠️ Moduli state_manager o risk_manager non trovati. Assicurati che siano nella directory.")
+    sys.exit(1)
 
 
 def load_etf_from_csv(csv_path: str = "titoli.csv") -> Tuple[List[str], Dict[str, str]]:
-    """Carica i titoli dal CSV leggendo colonna 'tipo' == 'ETF' o presenza keywords."""
     etf_tickers = []
     descriptions = {}
     
@@ -54,7 +61,6 @@ def load_etf_from_csv(csv_path: str = "titoli.csv") -> Tuple[List[str], Dict[str
 
 
 def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float = 3.0) -> Tuple[pd.Series, pd.Series]:
-    """Calcola il Supertrend per individuare la direzione del trend."""
     high = df['High']
     low = df['Low']
     close = df['Close']
@@ -95,8 +101,7 @@ def calculate_supertrend(df: pd.DataFrame, period: int = 10, multiplier: float =
     return st_line, direction
 
 
-def compute_timeframe_score(df: pd.DataFrame, timeframe_label: str = "1H") -> Tuple[float, List[str]]:
-    """Calcola lo score tecnico ponderato e i segnali per un dato DataFrame (1H o 1D)."""
+def compute_timeframe_score(ticker: str, df: pd.DataFrame, timeframe_label: str) -> Tuple[float, List[str]]:
     signals = []
     if df is None or len(df) < 15:
         return 0.5, ["⚠️ Dati insufficienti per l'analisi."]
@@ -105,8 +110,11 @@ def compute_timeframe_score(df: pd.DataFrame, timeframe_label: str = "1H") -> Tu
     close = df['Close']
     volume = df['Volume']
 
-    st_score, macd_score, ha_score = 0.5, 0.5, 0.5
-    rsi_score, ema_ma_score, vol_score = 0.5, 0.5, 0.5
+    # Inizializzazione punteggi base
+    scores = {
+        'SUPERTREND': 0.5, 'MACD': 0.5, 'HA': 0.5,
+        'RSI': 0.5, 'EMA_MA': 0.5, 'VOL': 0.5
+    }
 
     # 1. FILTRO ADX (KILL-SWITCH ANTI-LATERALITÀ)
     adx_val = 0.0
@@ -123,20 +131,20 @@ def compute_timeframe_score(df: pd.DataFrame, timeframe_label: str = "1H") -> Tu
     else:
         signals.append(f"⚡ ADX ({timeframe_label}): {adx_val:.1f} - Trend in corso confermato 🟢")
 
-    # 2. SUPERTREND (20%)
+    # 2. SUPERTREND
     st_line, st_dir = calculate_supertrend(df, period=10, multiplier=3.0)
     last_st_dir = st_dir.iloc[-1]
     last_st_val = st_line.iloc[-1]
     fmt = ".4f" if close.iloc[-1] < 1.0 else ".2f"
     
     if last_st_dir == 1:
-        st_score = 1.0
+        scores['SUPERTREND'] = 1.0
         signals.append(f"🟢 Supertrend ({timeframe_label}): RIALZISTA (Supp: {last_st_val:{fmt}})")
     else:
-        st_score = 0.0
+        scores['SUPERTREND'] = 0.0
         signals.append(f"🔴 Supertrend ({timeframe_label}): RIBASSISTA (Res: {last_st_val:{fmt}})")
 
-    # 3. MACD VELOCE (8, 17, 9) (20%)
+    # 3. MACD VELOCE (8, 17, 9)
     macd_obj = ta.trend.MACD(close=close, window_slow=17, window_fast=8, window_sign=9)
     m_line, s_line = macd_obj.macd().dropna(), macd_obj.macd_signal().dropna()
     if len(m_line) > 1 and len(s_line) > 1:
@@ -144,19 +152,19 @@ def compute_timeframe_score(df: pd.DataFrame, timeframe_label: str = "1H") -> Tu
         m_prev, s_prev = float(m_line.iloc[-2]), float(s_line.iloc[-2])
         
         if m_now > s_now and m_prev <= s_prev:
-            macd_score = 1.0
+            scores['MACD'] = 1.0
             signals.append(f"📈 MACD ({timeframe_label}): CROSSOVER RIALZISTA 🟢")
         elif m_now < s_now and m_prev >= s_prev:
-            macd_score = 0.0
+            scores['MACD'] = 0.0
             signals.append(f"📉 MACD ({timeframe_label}): CROSSOVER RIBASSISTA 🔴")
         elif m_now > s_now:
-            macd_score = 0.75
+            scores['MACD'] = 0.75
             signals.append(f"🟢 MACD ({timeframe_label}): Positivo")
         else:
-            macd_score = 0.25
+            scores['MACD'] = 0.25
             signals.append(f"🔴 MACD ({timeframe_label}): Negativo")
 
-    # 4. HEIKIN ASHI (20%)
+    # 4. HEIKIN ASHI
     ha = calculate_heikin_ashi(df)
     if len(ha) >= 5:
         last_ha_close = float(ha['HA_Close'].iloc[-1])
@@ -171,79 +179,83 @@ def compute_timeframe_score(df: pd.DataFrame, timeframe_label: str = "1H") -> Tu
         
         if is_green:
             if lower_shadow <= (ha_range * 0.03):
-                ha_score = 1.0
+                scores['HA'] = 1.0
                 signals.append(f"🕯️ HA ({timeframe_label}): Forte Spinta Verde 🟢")
             else:
-                ha_score = 0.70
+                scores['HA'] = 0.70
                 signals.append(f"🕯️ HA ({timeframe_label}): Candela Verde 🟢")
         else:
             if upper_shadow <= (ha_range * 0.03):
-                ha_score = 0.0
+                scores['HA'] = 0.0
                 signals.append(f"🕯️ HA ({timeframe_label}): Forte Spinta Rossa 🔴")
             else:
-                ha_score = 0.30
+                scores['HA'] = 0.30
                 signals.append(f"🕯️ HA ({timeframe_label}): Candela Rossa 🔴")
 
-    # 5. RSI VELOCE (9) (15%)
+    # 5. RSI VELOCE (9)
     rsi = ta.momentum.rsi(close, window=9).dropna()
     if not rsi.empty:
         rsi_val = float(rsi.iloc[-1])
         if rsi_val > 70:
-            rsi_score = 0.30
+            scores['RSI'] = 0.30
             signals.append(f"🟣 RSI ({timeframe_label}): {rsi_val:.1f} - Ipercomprato ⚠️")
         elif rsi_val < 30:
-            rsi_score = 0.80
+            scores['RSI'] = 0.80
             signals.append(f"🟣 RSI ({timeframe_label}): {rsi_val:.1f} - Ipervenduto 🟢")
         elif rsi_val >= 50:
-            rsi_score = 0.85
+            scores['RSI'] = 0.85
             signals.append(f"🟣 RSI ({timeframe_label}): {rsi_val:.1f} - Zona di Forza 🟢")
         else:
-            rsi_score = 0.20
+            scores['RSI'] = 0.20
             signals.append(f"🟣 RSI ({timeframe_label}): {rsi_val:.1f} - Zona di Debolezza 🔴")
 
-    # 6. EMA10 vs MA31 (15%)
+    # 6. EMA10 vs MA31
     if len(close) >= 31:
         ema10 = ta.trend.ema_indicator(close, window=10).iloc[-1]
         ma31 = ta.trend.sma_indicator(close, window=31).iloc[-1]
         diff_pct = ((ema10 - ma31) / ma31) * 100.0
         
         if diff_pct > 0.1:
-            ema_ma_score = 0.85
+            scores['EMA_MA'] = 0.85
             signals.append(f"📊 Medie ({timeframe_label}): EMA10 > MA31 (+{diff_pct:.2f}%) 🟢")
         elif diff_pct < -0.1:
-            ema_ma_score = 0.15
+            scores['EMA_MA'] = 0.15
             signals.append(f"📊 Medie ({timeframe_label}): MA31 > EMA10 ({diff_pct:.2f}%) 🔴")
         else:
-            ema_ma_score = 0.50
+            scores['EMA_MA'] = 0.50
             signals.append(f"📊 Medie ({timeframe_label}): EMA10 e MA31 Sovrapposte ⚪")
 
-    # 7. VOLUMI ULTIMA CANDELA (10%)
+    # 7. VOLUMI ULTIMA CANDELA
     if len(volume) >= 10:
         avg_vol = float(volume.tail(10).mean())
         curr_vol = float(volume.iloc[-1])
         if curr_vol >= avg_vol:
-            vol_score = 0.85
+            scores['VOL'] = 0.85
             signals.append(f"📊 Volumi ({timeframe_label}): Sopra la media 🟢")
         else:
-            vol_score = 0.35
+            scores['VOL'] = 0.35
             signals.append(f"📊 Volumi ({timeframe_label}): Sotto la media 🔴")
 
-    # SCORE GREZZO E APPLICAZIONE KILL-SWITCH
-    raw_score = (
-        (st_score * 0.20) +
-        (macd_score * 0.20) +
-        (ha_score * 0.20) +
-        (rsi_score * 0.15) +
-        (ema_ma_score * 0.15) +
-        (vol_score * 0.10)
-    )
+    # GESTIONE PESI DINAMICI
+    os.makedirs('data_state', exist_ok=True)
+    state_file = f"data_state/state_{ticker}_{timeframe_label}.json"
+    current_state = state_manager.load_state(state_file)
+    
+    base_weights = {
+        'SUPERTREND': 0.20, 'MACD': 0.20, 'HA': 0.20,
+        'RSI': 0.15, 'EMA_MA': 0.15, 'VOL': 0.10
+    }
+    
+    dynamic_weights = calculate_dynamic_weights(current_state, base_weights)
 
+    # Calcolo score ponderato
+    raw_score = sum(scores[ind] * dynamic_weights[ind] for ind in scores)
+    
     final_score = min(0.45, raw_score * 0.50) if is_lateral else raw_score
     return round(max(0.0, min(1.0, final_score)), 3), signals
 
 
 def analyze_etf_multi_timeframe(ticker: str) -> Dict:
-    """Analisi multi-timeframe (1H e 1D) con recupero corretto della variazione giornaliera."""
     result = {
         'ticker': ticker,
         'score_1h': 0.5,
@@ -257,26 +269,42 @@ def analyze_etf_multi_timeframe(ticker: str) -> Dict:
     try:
         tk = yf.Ticker(ticker)
 
-        # Scarica Timeframe Orario (1H) per operatività intraday
         df_1h = tk.history(period="12d", interval="1h", auto_adjust=True)
         if df_1h.empty or len(df_1h) < 15:
             df_1h = tk.history(period="1mo", interval="1d", auto_adjust=True)
         
         result['df_1h'] = df_1h
-
-        # Scarica Timeframe Giornaliero (1D) per il trend di fondo
         df_1d = tk.history(period="6mo", interval="1d", auto_adjust=True)
 
-        # Calcolo Score Tecnico sui due timeframe
-        score_1h, signals_1h = compute_timeframe_score(df_1h, "1H")
-        score_1d, signals_1d = compute_timeframe_score(df_1d, "1D")
+        # Calcolo Score con Pesi Dinamici
+        raw_score_1h, signals_1h = compute_timeframe_score(ticker, df_1h, "1H")
+        raw_score_1d, signals_1d = compute_timeframe_score(ticker, df_1d, "1D")
 
-        result['score_1h'] = score_1h
-        result['score_1d'] = score_1d
+        # RISK MANAGEMENT: Applicazione limiti di esposizione (Cap 25% suggerito per coperture)
+        state_file = f"data_state/state_{ticker}_1H.json"
+        current_state = state_manager.load_state(state_file)
+        
+        final_score_1h, risk_warning = apply_risk_limits(
+            ticker=ticker,
+            score=raw_score_1h,
+            current_exposure=current_state.get('exposure', 0),
+            max_exposure_limit=0.25 
+        )
+        
+        if risk_warning:
+            signals_1h.append(f"🛡️ RISK ALERT: {risk_warning}")
+
+        result['score_1h'] = final_score_1h
+        result['score_1d'] = raw_score_1d  # Il filtro giornaliero rimane puro, senza cap
         result['signals_1h'] = signals_1h
         result['signals_1d'] = signals_1d
 
-        # Calcolo Variazione Percentuale Reale Giornaliera rispetto a ieri (previousClose)
+        # Salvataggio Stato per ricalibrazione futura
+        current_state['last_score'] = final_score_1h
+        current_state['exposure'] = current_state.get('exposure', 0) + (final_score_1h * 0.1) # Simulazione accumulo
+        state_manager.save_state(state_file, current_state)
+
+        # Calcolo Variazione Percentuale
         try:
             fast_info = getattr(tk, 'fast_info', {})
             last_price = fast_info.get('lastPrice', None)
@@ -296,7 +324,6 @@ def analyze_etf_multi_timeframe(ticker: str) -> Dict:
                 pct_change = 0.0
 
             result['daily_var_pct'] = pct_change
-
         except Exception as e_var:
             print(f"⚠️ Errore calcolo variazione per {ticker}: {e_var}")
             result['daily_var_pct'] = 0.0
@@ -308,11 +335,9 @@ def analyze_etf_multi_timeframe(ticker: str) -> Dict:
 
 
 def create_unified_etf_report(results: List[Dict], descriptions: Dict) -> str:
-    """Crea UN UNICO messaggio Telegram sintetico con la vista Dual-Timeframe per tutti gli ETF."""
     if not results:
         return "📊 *AGENTE ETF LEVA - REPORT ORARIO*\nNessun ETF disponibile."
     
-    # Ordina per score orario decrescente (focus sull'operatività imminente)
     sorted_results = sorted(results, key=lambda x: x['score_1h'], reverse=True)
     now_str = datetime.now().strftime('%H:%M')
     lines = [f"📊 *AGENTE ETF LEVA - MONITORAGGIO ({now_str})*\n"]
@@ -336,8 +361,9 @@ def create_unified_etf_report(results: List[Dict], descriptions: Dict) -> str:
             f"   └ 📈 *1D Daily:*    {b_1d} Score: `{s_1d:.3f}`"
         )
         
-        # Alert Confluenza Trend
-        if s_1h >= 0.65 and s_1d < 0.45:
+        if any("RISK ALERT" in s for s in res['signals_1h']):
+            line += "\n   🛡️ *Tetto Rischio Raggiunto*"
+        elif s_1h >= 0.65 and s_1d < 0.45:
             line += "\n   ⚠️ *ATTENZIONE:* Intraday rialzista ma controtrend Daily!"
         elif s_1h >= 0.70 and s_1d >= 0.70:
             line += "\n   🔥 *CONFLUENZA RIALZISTA (1H + 1D)* 🟢"
@@ -367,7 +393,7 @@ def main():
     start_time = time.time()
     try:
         print("=" * 60)
-        print("📊 AGENTE ETF A LEVA - ANALISI MULTI-TIMEFRAME (1H + 1D)")
+        print("📊 AGENTE ETF - PESI DINAMICI & RISK MANAGEMENT")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
         
@@ -381,9 +407,7 @@ def main():
             res = analyze_etf_multi_timeframe(ticker)
             etf_results.append(res)
             
-            # Genera pagina web basata sul timeframe orario
             if res['df_1h'] is not None and not res['df_1h'].empty:
-                # Combina segnali 1H e 1D per la dashboard HTML
                 combined_signals = ["--- TIMEFRAME 1H (INTRADAY) ---"] + res['signals_1h'] + \
                                    ["", "--- TIMEFRAME 1D (DAILY) ---"] + res['signals_1d']
                 generate_web_page(ticker, desc, "flash", res['df_1h'], res['score_1h'], combined_signals)
