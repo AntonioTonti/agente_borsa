@@ -27,7 +27,7 @@ from analysis_utils import (
 )
 from web_generator import generate_web_page
 from risk_manager import compute_risk_levels
-from state_manager import load_state
+# from state_manager import load_state
 
 
 def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
