@@ -26,6 +26,8 @@ from analysis_utils import (
     format_trend_line
 )
 from web_generator import generate_web_page
+from risk_manager import compute_risk_levels
+from state_manager import load_state
 
 
 def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
@@ -333,6 +335,20 @@ def analyze_flash_ticker(ticker: str) -> Tuple[List[str], float, float, Dict, Op
 
         pct_change = ((last_price - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
         extra_data['daily_var_pct'] = pct_change
+        
+        # Calcolo ATR per parametri di rischio
+        atr_val = 0.0
+        if len(df_d) >= 14:
+            atr_indicator = ta.volatility.AverageTrueRange(high=df_d['High'], low=df_d['Low'], close=df_d['Close'], window=14)
+            atr_val = float(atr_indicator.average_true_range().iloc[-1])
+            
+        sl, tp, risk_label, sizing = 0.0, 0.0, "N/D", 0
+        try:
+            sl, tp, risk_label, sizing = compute_risk_levels(last_price, atr_val)
+        except Exception:
+            pass
+            
+        extra_data['risk'] = {'sl': sl, 'tp': tp, 'label': risk_label, 'sizing': sizing}
 
         signals_d, score_d, extra_d = analyze_df_engine(df_d, tk=tk)
         extra_data.update(extra_d)
@@ -372,14 +388,20 @@ def create_daily_report_section(
         
         url = f"https://antoniotonti.github.io/agente_borsa/flash/{ticker}.html"
         
-        # Intestazione con Ticker e Variazione %
-        header_line = f"🔹 [{ticker}]({url}) - {desc} ({sign}{var_pct:.2f}%)"
-        # Prima riga sotto-livello: Rating Daily
-        daily_line = f"├ 📈 *1D Daily:* {bullet_d} Score: `{score_d:.3f}`"
-        # Seconda riga sotto-livello: Rating Hourly
-        hourly_line = f"└ ⚡ *1H Intraday:* {bullet_h} Score: `{score_h:.3f}`\n"
+        risk_info = extra_data.get('risk', {})
+        r_label = risk_info.get('label', '-')
+        r_size = risk_info.get('sizing', 0)
+        sl = risk_info.get('sl', 0.0)
+        tp = risk_info.get('tp', 0.0)
         
-        lines.extend([header_line, daily_line, hourly_line])
+        # Intestazione con Ticker e Variazione %
+        header_line = f"🔹 [{ticker}]({url}) - *{desc}* (Oggi: {sign}{var_pct:.2f}%)"
+        daily_line = f"   ├ 📈 *1D Daily:* {bullet_d} `{score_d:.3f}`"
+        hourly_line = f"   ├ ⚡ *1H Intraday:* {bullet_h} `{score_h:.3f}`"
+        risk_line = f"   ├ 🛡️ *Rischio:* {r_label} | Size: {r_size}%"
+        sltp_line = f"   └ 🎯 *SL:* {sl:.3f} | *TP:* {tp:.3f}\n"
+        
+        lines.extend([header_line, daily_line, hourly_line, risk_line, sltp_line])
         
     return "\n".join(lines)
 
