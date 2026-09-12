@@ -1,3 +1,7 @@
+import os
+print("Token caricato:", os.getenv("TELEGRAM_BOT_TOKEN") is not None)
+print("Chat ID caricato:", os.getenv("TELEGRAM_CHAT_ID") is not None)
+
 name: Agente ETF Orario
 
 on:
