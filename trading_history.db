@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""
+Modulo Gestione Database SQLite per Agente Flash.
+Memorizza previsioni, esiti storici e pesi dinamici degli indicatori.
+"""
+
+import sqlite3
+import json
+from datetime import datetime
+from typing import List, Dict, Tuple, Optional
+from zoneinfo import ZoneInfo
+
+DB_FILE = "trading_history.db"
+
+def get_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Inizializza la struttura del database se non esiste."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Tabella Storico Previsioni
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS previsioni (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            frame TEXT NOT NULL, -- '1H' o '1D'
+            score_generato REAL NOT NULL,
+            direzione TEXT NOT NULL, -- 'BULLISH', 'BEARISH', 'NEUTRAL'
+            prezzo_all_emissione REAL NOT NULL,
+            pesi_usati_json TEXT NOT NULL,
+            indicatori_valori_json TEXT NOT NULL,
+            verificato INTEGER DEFAULT 0
+        )
+        """)
+
+        # Tabella Esiti e Verifiche
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS esiti_verificati (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            previsione_id INTEGER NOT NULL,
+            timestamp_verifica TEXT NOT NULL,
+            prezzo_effettivo REAL NOT NULL,
+            rendimento_reale_pct REAL NOT NULL,
+            esito_corretto INTEGER NOT NULL, -- 1 per successo, 0 per errore
+            FOREIGN KEY (previsione_id) REFERENCES previsioni (id)
+        )
+        """)
+
+        # Tabella Pesi Indicatori per Ticker/Frame
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS pesi_indicatori (
+            ticker TEXT NOT NULL,
+            frame TEXT NOT NULL,
+            pesi_json TEXT NOT NULL,
+            ultimo_aggiornamento TEXT NOT NULL,
+            PRIMARY KEY (ticker, frame)
+        )
+        """)
+        
+        conn.commit()
+
+def log_previsione(
+    ticker: str, 
+    frame: str, 
+    score: float, 
+    direzione: str, 
+    prezzo: float, 
+    pesi: Dict[str, float], 
+    valori_indicatori: Dict[str, float]
+) -> int:
+    """Registra una nuova previsione emessa."""
+    now_str = datetime.now(ZoneInfo("Europe/Rome")).isoformat()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO previsioni (timestamp, ticker, frame, score_generato, direzione, prezzo_all_emissione, pesi_usati_json, indicatori_valori_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (now_str, ticker, frame, score, direzione, prezzo, json.dumps(pesi), json.dumps(valori_indicatori)))
+        conn.commit()
+        return cursor.lastrowid
+
+def get_previsioni_da_verificare(frame: str, max_age_hours: int = 48) -> List[Dict]:
+    """Recupera le previsioni emesse nel passato non ancora verificate."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        SELECT * FROM previsioni 
+        WHERE verificato = 0 AND frame = ?
+        ORDER BY timestamp ASC
+        """, (frame,))
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+
+def registra_verifica(previsione_id: int, prezzo_effettivo: float, rendimento_pct: float, esito_corretto: bool):
+    """Marca la previsione come verificata e salva l'esito reale."""
+    now_str = datetime.now(ZoneInfo("Europe/Rome")).isoformat()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO esiti_verificati (previsione_id, timestamp_verifica, prezzo_effettivo, rendimento_reale_pct, esito_corretto)
+        VALUES (?, ?, ?, ?, ?)
+        """, (previsione_id, now_str, prezzo_effettivo, rendimento_pct, 1 if esito_corretto else 0))
+        
+        cursor.execute("UPDATE previsioni SET verificato = 1 WHERE id = ?", (previsione_id,))
+        conn.commit()
+
+def get_pesi_correnti(ticker: str, frame: str, pesi_default: Dict[str, float]) -> Dict[str, float]:
+    """Ritorna i pesi aggiornati dall'auto-tuner, o i pesi di default se non presenti."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT pesi_json FROM pesi_indicatori WHERE ticker = ? AND frame = ?", (ticker, frame))
+        row = cursor.fetchone()
+        if row:
+            return json.loads(row['pesi_json'])
+        return pesi_default
+
+def salva_pesi_aggiornati(ticker: str, frame: str, pesi: Dict[str, float]):
+    """Salva i nuovi pesi ricalcolati."""
+    now_str = datetime.now(ZoneInfo("Europe/Rome")).isoformat()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+        INSERT INTO pesi_indicatori (ticker, frame, pesi_json, ultimo_aggiornamento)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(ticker, frame) DO UPDATE SET
+            pesi_json = excluded.pesi_json,
+            ultimo_aggiornamento = excluded.ultimo_aggiornamento
+        """, (ticker, frame, json.dumps(pesi), now_str))
+        conn.commit()
+
+if __name__ == "__main__":
+    init_db()
+    print("✅ Database SQLite inizializzato con successo.")
