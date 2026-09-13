@@ -181,13 +181,13 @@ def analyze_flash_ticker(ticker: str):
 
         return {
             "ticker": ticker,
-            "price": round(current_price, 2),
+            "price": round(current_price, 3),
             "pct_change": round(daily_pct_change, 2),
             "score_1d": round(score_1d, 2),
             "score_1h": round(score_1h, 2),
-            "atr": round(atr, 2),
-            "stop_loss": round(stop_loss, 2),
-            "take_profit": round(take_profit, 2),
+            "atr": round(atr, 3),
+            "stop_loss": round(stop_loss, 3),
+            "take_profit": round(take_profit, 3),
             "sizing_risk_pct": round(sizing_risk, 2),
         }
 
@@ -249,13 +249,12 @@ def format_telegram_alert(title: str, results: list, descriptions: dict) -> str:
         change_sign = "+" if r['pct_change'] > 0 else ""
         desc = descriptions.get(r['ticker'], r['ticker'])
 
-        msg += f"{trend_emoji} <b>{r['ticker']}</b> - {desc} | {r['price']}$ ({change_sign}{r['pct_change']}%)\n"
+        msg += f"{trend_emoji} <b>{r['ticker']}</b> - {desc} | {r['price']:.3f}$ ({change_sign}{r['pct_change']:.2f}%)\n"
         msg += f"   ├ Score 1D: {r['score_1d']} | Score 1H: {r['score_1h']}\n"
-        msg += f"   ├ Rischio: SL {r['stop_loss']}$ | TP {r['take_profit']}$\n"
-        msg += f"   └ ATR: {r['atr']} | Size Rischio: {r['sizing_risk_pct']}%\n\n"
+        msg += f"   ├ Rischio: SL {r['stop_loss']:.3f}$ | TP {r['take_profit']:.3f}$\n"
+        msg += f"   └ ATR: {r['atr']:.3f} | Size Rischio: {r['sizing_risk_pct']:.2f}%\n\n"
 
     return msg
-
 
 # ==========================================
 # MAIN
