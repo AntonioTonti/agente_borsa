@@ -245,7 +245,7 @@ def format_telegram_alert(title: str, results: list, descriptions: dict) -> str:
         reverse=True,
     )
 
-    RISK_PER_TRADE_PCT = 3.0  # Rischio fisso per trade
+    RISK_PER_TRADE_PCT = 2.0  # Rischio fisso per trade
 
     msg = f"<b>{title}</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━━━━━\n"
