@@ -2,15 +2,22 @@
 """
 Agente di Trading - Analisi ETF
 Motore di scoring con kill-switch ADX per fasi laterali.
+Usa la libreria `ta` (coerente con gli altri agenti del progetto).
 """
 
 import os
+import sys
 from datetime import datetime
 
 import requests
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
+import ta
+
+sys.path.append('.')
+from analysis_utils import calculate_heikin_ashi
+
 
 # ==========================================
 # CONFIGURAZIONE
@@ -33,47 +40,64 @@ def analyze_df_engine(df: pd.DataFrame) -> float:
     if df.empty or len(df) < 35:
         return 0.0
 
-    # Normalizza MultiIndex (yfinance a volte restituisce colonne annidate)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    # Lavora su una copia per non mutare il DataFrame originale
-    df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
+    df = df[['Open', 'High', 'Low', 'Close', 'Volume']].copy().dropna()
 
-    # Calcolo Indicatori Tecnici tramite pandas_ta
-    df.ta.ema(length=10, append=True)
-    df.ta.sma(length=31, append=True)
-    df.ta.rsi(length=14, append=True)
-    df.ta.macd(fast=12, slow=26, signal=9, append=True)
-    df.ta.adx(length=14, append=True)
+    if len(df) < 35:
+        return 0.0
 
-    # Calcolo Heikin Ashi
-    ha_df = ta.ha(df['Open'], df['High'], df['Low'], df['Close'])
-    df = pd.concat([df, ha_df], axis=1)
+    close = df['Close'].squeeze()
+    high = df['High'].squeeze()
+    low = df['Low'].squeeze()
 
-    latest = df.iloc[-1]
+    # --- Indicatori (libreria `ta`) ---
+    ema10 = ta.trend.ema_indicator(close, window=10)
+    sma31 = ta.trend.sma_indicator(close, window=31)
+    rsi = ta.momentum.rsi(close, window=14)
+
+    macd_obj = ta.trend.MACD(close=close, window_slow=26, window_fast=12, window_sign=9)
+    macd_hist = macd_obj.macd_diff()  # istogramma MACD
+
+    adx_obj = ta.trend.ADXIndicator(high=high, low=low, close=close, window=14)
+    adx = adx_obj.adx()
+
+    ha = calculate_heikin_ashi(df)
+
+    # --- Valori più recenti ---
+    try:
+        ema_now = float(ema10.dropna().iloc[-1])
+        sma_now = float(sma31.dropna().iloc[-1])
+        rsi_val = float(rsi.dropna().iloc[-1])
+        macd_h = float(macd_hist.dropna().iloc[-1])
+        adx_val = float(adx.dropna().iloc[-1])
+        ha_close = float(ha['HA_Close'].iloc[-1])
+        ha_open = float(ha['HA_Open'].iloc[-1])
+    except (IndexError, ValueError) as e:
+        print(f"   ⚠️ Dati insufficienti per gli indicatori: {e}")
+        return 0.0
 
     # 1. Kill-Switch ADX (fase laterale → score azzerato)
-    adx_val = latest.get('ADX_14')
     if pd.isna(adx_val) or adx_val < 20:
         return 0.0
 
     score = 0.0
 
     # 2. Trend di fondo (EMA10 vs SMA31)
-    if latest['EMA_10'] > latest['SMA_31']:
+    if ema_now > sma_now:
         score += 0.25
 
     # 3. Momentum (RSI)
-    if 50 < latest['RSI_14'] < 70:
+    if 50 < rsi_val < 70:
         score += 0.25
 
     # 4. MACD (istogramma positivo)
-    if latest['MACDh_12_26_9'] > 0:
+    if macd_h > 0:
         score += 0.25
 
     # 5. Price Action (Heikin Ashi verde)
-    if latest['HA_close'] > latest['HA_open']:
+    if ha_close > ha_open:
         score += 0.25
 
     return min(score, 1.0)
@@ -94,10 +118,9 @@ def analyze_flash_ticker(ticker: str):
                             auto_adjust=True, progress=False)
 
         if df_1d.empty or df_1h.empty:
-            print(f"⚠️ {ticker}: dati insufficienti (1D o 1H vuoti)")
+            print(f"   ⚠️ {ticker}: dati insufficienti (1D o 1H vuoti)")
             return None
 
-        # Normalizza MultiIndex
         if isinstance(df_1d.columns, pd.MultiIndex):
             df_1d.columns = df_1d.columns.get_level_values(0)
         if isinstance(df_1h.columns, pd.MultiIndex):
@@ -108,17 +131,25 @@ def analyze_flash_ticker(ticker: str):
         score_1h = analyze_df_engine(df_1h)
 
         # --- Gestione Rischio (ATR Daily) ---
-        df_atr = df_1d[['Open', 'High', 'Low', 'Close', 'Volume']].copy()
-        df_atr.ta.atr(length=14, append=True)
+        df_1d = df_1d[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
 
-        latest_atr = df_atr.iloc[-1]
+        atr_obj = ta.volatility.AverageTrueRange(
+            high=df_1d['High'].squeeze(),
+            low=df_1d['Low'].squeeze(),
+            close=df_1d['Close'].squeeze(),
+            window=14,
+        )
+        atr_series = atr_obj.average_true_range().dropna()
+
+        if atr_series.empty:
+            print(f"   ⚠️ {ticker}: ATR non calcolabile")
+            return None
+
+        atr = float(atr_series.iloc[-1])
+
         current_price = float(df_1d['Close'].iloc[-1])
         prev_price = float(df_1d['Close'].iloc[-2])
-
         daily_pct_change = ((current_price - prev_price) / prev_price) * 100.0
-
-        # pandas_ta usa il nome 'ATRr_14' (RMA-based), non 'ATR_14'
-        atr = float(latest_atr['ATRr_14'])
 
         # Setup: SL 1.5 ATR, TP 3 ATR (R:R 1:2)
         stop_loss = current_price - (atr * 1.5)
@@ -138,7 +169,7 @@ def analyze_flash_ticker(ticker: str):
         }
 
     except Exception as e:
-        print(f"❌ Errore su {ticker}: {e}")
+        print(f"   ❌ Errore su {ticker}: {e}")
         return None
 
 
@@ -175,7 +206,6 @@ def format_telegram_alert(title: str, results: list) -> str:
     if not results:
         return f"<b>{title}</b>\nNessun segnale rilevante."
 
-    # Ordinamento: Score 1D decrescente, poi Score 1H
     sorted_results = sorted(
         results,
         key=lambda x: (x['score_1d'], x['score_1h']),
