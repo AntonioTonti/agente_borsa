@@ -30,7 +30,7 @@ from web_generator import generate_web_page
 # ============================================================================
 # COSTANTI
 # ============================================================================
-RISK_PER_TRADE_PCT = 3.0   # Rischio fisso per trade (usato per size massima)
+RISK_PER_TRADE_PCT = 2.0   # Rischio fisso per trade (usato per size massima)
 
 
 # ============================================================================
