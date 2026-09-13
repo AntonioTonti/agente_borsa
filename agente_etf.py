@@ -254,7 +254,7 @@ def format_telegram_alert(title: str, results: list, descriptions: dict) -> str:
         if r['score_1d'] >= 0.75:
             trend_emoji = "🟢"
         elif r['score_1d'] >= 0.5:
-            trend_emoji = "🟡"
+            trend_emoji = "⚪"
         else:
             trend_emoji = "🔴"
 
