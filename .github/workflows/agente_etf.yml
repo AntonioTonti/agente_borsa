@@ -1,3 +1,7 @@
+import os
+print("Token caricato:", os.getenv("TELEGRAM_BOT_TOKEN") is not None)
+print("Chat ID caricato:", os.getenv("TELEGRAM_CHAT_ID") is not None)
+
 name: Agente ETF Orario
 
 on:
@@ -13,16 +17,15 @@ jobs:
       - name: Checkout codice
         uses: actions/checkout@v4
 
-      - name: Configura Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.12'
 
-      - name: Installa dipendenze
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install plotly yfinance pandas ta requests
+          pip install plotly yfinance pandas pandas-ta requests
 
       - name: Esegui Agente ETF
         env:
