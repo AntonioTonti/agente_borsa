@@ -222,7 +222,17 @@ def send_telegram_message(message: str) -> bool:
     except Exception as e:
         print(f"❌ Eccezione invio Telegram: {e}")
         return False
-
+def get_volatility_bullet(sizing_risk_pct: float) -> tuple:
+    """
+    Restituisce (pallino, etichetta) in base alla Size Rischio (%).
+    Size Rischio = distanza dello SL in % dal prezzo → proxy volatilità.
+    """
+    if sizing_risk_pct < 2.0:
+        return "🟢", "Bassa"
+    elif sizing_risk_pct <= 4.0:
+        return "⚪", "Media"
+    else:
+        return "🔴", "Alta"
 
 def format_telegram_alert(title: str, results: list, descriptions: dict) -> str:
     """Formatta l'output per Telegram ordinato per Score Daily."""
@@ -234,6 +244,8 @@ def format_telegram_alert(title: str, results: list, descriptions: dict) -> str:
         key=lambda x: (x['score_1d'], x['score_1h']),
         reverse=True,
     )
+
+    RISK_PER_TRADE_PCT = 3.0  # Rischio fisso per trade
 
     msg = f"<b>{title}</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -249,13 +261,23 @@ def format_telegram_alert(title: str, results: list, descriptions: dict) -> str:
         change_sign = "+" if r['pct_change'] > 0 else ""
         desc = descriptions.get(r['ticker'], r['ticker'])
 
+        # Volatilità (basata su Size Rischio)
+        vol_bullet, vol_label = get_volatility_bullet(r['sizing_risk_pct'])
+
+        # Calcolo posizione massima sul capitale (rischio fisso 3%)
+        if r['sizing_risk_pct'] > 0:
+            max_capital_pct = (RISK_PER_TRADE_PCT / r['sizing_risk_pct']) * 100.0
+            max_capital_pct = min(max_capital_pct, 100.0)  # cap a 100%
+        else:
+            max_capital_pct = 100.0
+
         msg += f"{trend_emoji} <b>{r['ticker']}</b> - {desc} | {r['price']:.3f}$ ({change_sign}{r['pct_change']:.2f}%)\n"
         msg += f"   ├ Score 1D: {r['score_1d']} | Score 1H: {r['score_1h']}\n"
         msg += f"   ├ Rischio: SL {r['stop_loss']:.3f}$ | TP {r['take_profit']:.3f}$\n"
-        msg += f"   └ ATR: {r['atr']:.3f} | Size Rischio: {r['sizing_risk_pct']:.2f}%\n\n"
+        msg += f"   └ {vol_bullet} Volatilità: {vol_label} (ATR {r['atr']:.3f}) | Size Rischio: {r['sizing_risk_pct']:.2f}%\n"
+        msg += f"      💰 Rischio {RISK_PER_TRADE_PCT:.0f}% → max <b>{max_capital_pct:.0f}%</b> del capitale\n\n"
 
     return msg
-
 # ==========================================
 # MAIN
 # ==========================================
