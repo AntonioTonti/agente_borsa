@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Agente di Trading - Analisi Giornaliera & Oraria (FLASH)
-Format Telegram: Ticker in evidenza, 1D Daily (1a riga) e 1H Intraday (2a riga indentata).
-Ordinamento principale per Score Daily.
+Format Telegram: Ticker in evidenza con 2 blocchi (1D Daily + 1H Intraday).
+Ogni blocco mostra score, SL/TP, volatilità e size rischio massima.
 """
 
 import os
@@ -26,10 +26,16 @@ from analysis_utils import (
     format_trend_line
 )
 from web_generator import generate_web_page
-from risk_manager import compute_risk_levels
-# from state_manager import load_state
+
+# ============================================================================
+# COSTANTI
+# ============================================================================
+RISK_PER_TRADE_PCT = 3.0   # Rischio fisso per trade (usato per size massima)
 
 
+# ============================================================================
+# HELPER: ZIGZAG
+# ============================================================================
 def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
     if len(df) < 20:
         return 0
@@ -39,7 +45,7 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
     last_pivot_type = 'H'
     trends = []
     thresh = deviation_pct / 100.0
-    
+
     for i in range(1, len(df)):
         if last_pivot_type == 'H':
             if highs[i] > last_pivot_val:
@@ -55,17 +61,20 @@ def calculate_zigzag_trend(df: pd.DataFrame, deviation_pct: float = 5.0) -> int:
                 last_pivot_val = highs[i]
                 last_pivot_type = 'H'
                 trends.append(1)
-                
+
     if not trends:
         return 1 if last_pivot_type == 'H' else -1
     return trends[-1]
 
 
+# ============================================================================
+# HELPER: RATING ANALISTI
+# ============================================================================
 def get_analyst_rating_score(tk: yf.Ticker) -> Tuple[float, str]:
     try:
         info = tk.info
         recommendation = info.get('recommendationKey', '').lower()
-        
+
         if recommendation in ['strong_buy', 'buy']:
             return 1.0, f"Rating Analisti: {recommendation.upper()} 🟢"
         elif recommendation in ['outperform', 'overweight']:
@@ -82,10 +91,74 @@ def get_analyst_rating_score(tk: yf.Ticker) -> Tuple[float, str]:
         return 0.50, "Rating Analisti: N/D ⚪"
 
 
+# ============================================================================
+# HELPER: CALCOLO RISCHIO (ATR / SL / TP / SIZE / VOLATILITÀ)
+# ============================================================================
+def compute_risk_metrics(df: pd.DataFrame, current_price: Optional[float] = None) -> Dict:
+    """
+    Calcola ATR, SL, TP, size rischio e classificazione volatilità
+    per un DataFrame OHLC. Ritorna un dict con tutti i valori.
+    """
+    default = {
+        'atr': 0.0, 'sl': 0.0, 'tp': 0.0, 'sizing': 0.0,
+        'vol_bullet': '⚪', 'vol_label': 'N/D', 'max_capital': 0.0,
+    }
+
+    if df is None or len(df) < 15:
+        return default
+
+    try:
+        high = df['High'].squeeze()
+        low = df['Low'].squeeze()
+        close = df['Close'].squeeze()
+
+        if current_price is None:
+            current_price = float(close.iloc[-1])
+
+        atr_ind = ta.volatility.AverageTrueRange(
+            high=high, low=low, close=close, window=14
+        )
+        atr_series = atr_ind.average_true_range().dropna()
+        if atr_series.empty:
+            return default
+
+        atr = float(atr_series.iloc[-1])
+        if atr <= 0 or current_price <= 0:
+            return default
+
+        sl = current_price - 1.5 * atr
+        tp = current_price + 3.0 * atr
+        sizing = (atr * 1.5) / current_price * 100.0
+
+        # Classificazione volatilità
+        if sizing < 2.0:
+            vol_bullet, vol_label = "🟢", "Bassa"
+        elif sizing <= 4.0:
+            vol_bullet, vol_label = "⚪", "Media"
+        else:
+            vol_bullet, vol_label = "🔴", "Alta"
+
+        # Max % capitale con rischio fisso
+        max_capital = min(RISK_PER_TRADE_PCT / sizing * 100.0, 100.0) if sizing > 0 else 100.0
+
+        return {
+            'atr': round(atr, 3),
+            'sl': round(sl, 3),
+            'tp': round(tp, 3),
+            'sizing': round(sizing, 2),
+            'vol_bullet': vol_bullet,
+            'vol_label': vol_label,
+            'max_capital': round(max_capital, 0),
+        }
+    except Exception as e:
+        print(f"   ⚠️ Errore calcolo rischio: {e}")
+        return default
+
+
+# ============================================================================
+# MOTORE DI ANALISI (invariato)
+# ============================================================================
 def analyze_df_engine(df: pd.DataFrame, tk: Optional[yf.Ticker] = None) -> Tuple[List[str], float, Dict]:
-    """
-    Motore universale di calcolo score e indicatori per un DataFrame OHLC.
-    """
     signals = []
     extra_data = {}
 
@@ -103,12 +176,12 @@ def analyze_df_engine(df: pd.DataFrame, tk: Optional[yf.Ticker] = None) -> Tuple
         ma31 = ta.trend.sma_indicator(close, window=31)
         clean_ema = ema10.dropna()
         clean_ma = ma31.dropna()
-        
+
         if len(clean_ema) > 1 and len(clean_ma) > 1:
             ema_now, ma_now = float(clean_ema.iloc[-1]), float(clean_ma.iloc[-1])
             ema_prev, ma_prev = float(clean_ema.iloc[-2]), float(clean_ma.iloc[-2])
             fmt = ".4f" if ema_now < 1.0 else ".2f"
-            
+
             if ema_now > ma_now and ema_prev <= ma_prev:
                 signals.append(f"📈 EMA10 ({ema_now:{fmt}}) > MA31 ({ma_now:{fmt}}) (CROSSOVER UP)")
                 ema_ma_score = 1.0
@@ -127,7 +200,7 @@ def analyze_df_engine(df: pd.DataFrame, tk: Optional[yf.Ticker] = None) -> Tuple
         var_percent, target_price, stop_loss = calculate_trend_estimate(close, lookback=7)
         extra_data.update({'var_percent': var_percent, 'target_price': target_price, 'stop_loss': stop_loss})
         signals.append(format_trend_line(var_percent, target_price, stop_loss))
-        
+
         if var_percent > 3.0: trend_score = 1.0
         elif var_percent > 0.0: trend_score = 0.75
         elif var_percent == 0.0: trend_score = 0.50
@@ -148,34 +221,34 @@ def analyze_df_engine(df: pd.DataFrame, tk: Optional[yf.Ticker] = None) -> Tuple
         avg_delta = float(delta_series.tail(lookback_len).abs().mean())
         sign = "+" if curr_delta > 0 else ""
         signals.append(f"📐 Delta EMA10/MA31: {sign}{curr_delta:.2f}% (Media Abs: {avg_delta:.2f}%)")
-        
+
         if curr_delta > 0:
             ema_ma_delta_score = 1.0 if (avg_delta > 0 and curr_delta >= avg_delta * 1.5) else (0.80 if curr_delta >= avg_delta else 0.60)
         else:
             abs_curr = abs(curr_delta)
             ema_ma_delta_score = 0.0 if (avg_delta > 0 and abs_curr >= avg_delta * 1.5) else (0.20 if abs_curr >= avg_delta else 0.40)
 
-    # 5 & 6. HEIKIN ASHI (FORZA 15%, STATO 10%)
+    # 5 & 6. HEIKIN ASHI
     ha = calculate_heikin_ashi(df)
     if len(ha) >= 20:
         last_ha_close = float(ha['HA_Close'].iloc[-1])
         last_ha_open = float(ha['HA_Open'].iloc[-1])
         last_ha_low = float(ha['HA_Low'].iloc[-1])
         last_ha_high = float(ha['HA_High'].iloc[-1])
-        
+
         ha_body = abs(last_ha_close - last_ha_open)
         ha_range = max(1e-6, last_ha_high - last_ha_low)
         upper_shadow = last_ha_high - max(last_ha_open, last_ha_close)
         lower_shadow = min(last_ha_open, last_ha_close) - last_ha_low
-        
+
         is_green = last_ha_close >= last_ha_open
         is_doji = (ha_body / ha_range) < 0.15
-        
+
         ha_bodies = (ha['HA_Close'] - ha['HA_Open']).abs()
         lookback_ha = min(63, len(ha_bodies))
         avg_body = float(ha_bodies.tail(lookback_ha).mean())
         ratio_body = (ha_bodies.iloc[-1] / avg_body) if avg_body > 0 else 1.0
-        
+
         if is_green:
             ha_force_score = 1.0 if ratio_body >= 1.5 else (0.75 if ratio_body >= 1.0 else 0.50)
         else:
@@ -218,7 +291,7 @@ def analyze_df_engine(df: pd.DataFrame, tk: Optional[yf.Ticker] = None) -> Tuple
         lookback_vol = min(63, len(volume))
         avg_vol = float(volume.tail(lookback_vol).mean())
         curr_vol = float(volume.iloc[-1])
-        
+
         if curr_vol > avg_vol * 1.5:
             vol_score = 1.0
             vol_desc = "Volumi in forte aumento (>150% media) 🟢"
@@ -228,7 +301,7 @@ def analyze_df_engine(df: pd.DataFrame, tk: Optional[yf.Ticker] = None) -> Tuple
         else:
             vol_score = 0.35
             vol_desc = "Volumi sotto la media 🔴"
-            
+
         signals.append(f"📊 Volumi: {curr_vol:,.0f} vs Media {avg_vol:,.0f} ({vol_desc})")
 
     # 9. RSI (5%)
@@ -251,7 +324,7 @@ def analyze_df_engine(df: pd.DataFrame, tk: Optional[yf.Ticker] = None) -> Tuple
             else:
                 rsi_score = 0.50
                 rsi_desc = "Zona Neutra (40-60) ⚪"
-            
+
             signals.append(f"🟣 RSI (14): {rsi_val:.2f} - {rsi_desc}")
 
     # 10. MACD (5%)
@@ -261,7 +334,7 @@ def analyze_df_engine(df: pd.DataFrame, tk: Optional[yf.Ticker] = None) -> Tuple
         if len(m_line) > 1 and len(s_line) > 1:
             m_now, s_now = float(m_line.iloc[-1]), float(s_line.iloc[-1])
             m_prev, s_prev = float(m_line.iloc[-2]), float(s_line.iloc[-2])
-            
+
             if m_now > s_now and m_prev <= s_prev:
                 macd_score = 1.0
                 macd_desc = "Crossover Rialzista (CROSSOVER UP) 📈"
@@ -274,36 +347,40 @@ def analyze_df_engine(df: pd.DataFrame, tk: Optional[yf.Ticker] = None) -> Tuple
             else:
                 macd_score = 0.25
                 macd_desc = "Sotto la Signal Line (Fase Negativa) 🔴"
-                
+
             signals.append(f"📊 MACD: {macd_desc}")
 
-    # SCORE FINALE (100% TOTALE)
+    # SCORE FINALE
     final_score = (
-        (ema_ma_score * 0.15) + 
-        (trend_score * 0.13) + 
-        (analyst_score * 0.05) + 
+        (ema_ma_score * 0.15) +
+        (trend_score * 0.13) +
+        (analyst_score * 0.05) +
         (ema_ma_delta_score * 0.12) +
-        (ha_force_score * 0.15) + 
-        (ha_state_score * 0.10) + 
+        (ha_force_score * 0.15) +
+        (ha_state_score * 0.10) +
         (zigzag_score * 0.10) +
-        (vol_score * 0.05) + 
-        (close_change_score * 0.05) + 
-        (rsi_score * 0.05) + 
+        (vol_score * 0.05) +
+        (close_change_score * 0.05) +
+        (rsi_score * 0.05) +
         (macd_score * 0.05)
     )
     return signals, round(max(0.0, min(1.0, final_score)), 3), extra_data
 
 
+# ============================================================================
+# ANALISI TICKER (Daily + Hourly con rischio per entrambi)
+# ============================================================================
 def analyze_flash_ticker(ticker: str) -> Tuple[List[str], float, float, Dict, Optional[pd.DataFrame]]:
     """
-    Analizza un ticker sia sul time frame Daily (1D) che Orario (1H).
+    Analizza un ticker su Daily (1D) e Hourly (1H).
     Ritorna: (signals_daily, score_daily, score_hourly, extra_data, df_daily)
+    extra_data contiene risk_daily e risk_hourly.
     """
-    extra_data = {'daily_var_pct': 0.0}
+    extra_data = {'daily_var_pct': 0.0, 'risk_daily': {}, 'risk_hourly': {}}
     try:
         tk = yf.Ticker(ticker)
-        
-        # --- 1. DATI DAILY (6M, 1D) ---
+
+        # --- 1. DATI DAILY ---
         df_d = tk.history(period="6mo", interval="1d", auto_adjust=True)
         if df_d.empty or len(df_d) < DAILY_MIN_POINTS:
             print(f"⚠️ {ticker}: Dati daily vuoti o insufficienti.")
@@ -311,7 +388,7 @@ def analyze_flash_ticker(ticker: str) -> Tuple[List[str], float, float, Dict, Op
 
         df_d = df_d[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
 
-        # Calculation Price & Variazione Live
+        # Prezzo live
         fast_info = getattr(tk, 'fast_info', {})
         last_price = fast_info.get('lastPrice', None)
         prev_close = fast_info.get('previousClose', None)
@@ -335,29 +412,23 @@ def analyze_flash_ticker(ticker: str) -> Tuple[List[str], float, float, Dict, Op
 
         pct_change = ((last_price - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
         extra_data['daily_var_pct'] = pct_change
-        
-        # Calcolo ATR per parametri di rischio
-        atr_val = 0.0
-        if len(df_d) >= 14:
-            atr_indicator = ta.volatility.AverageTrueRange(high=df_d['High'], low=df_d['Low'], close=df_d['Close'], window=14)
-            atr_val = float(atr_indicator.average_true_range().iloc[-1])
-            
-        sl, tp, risk_label, sizing = 0.0, 0.0, "N/D", 0
-        try:
-            sl, tp, risk_label, sizing = compute_risk_levels(last_price, atr_val)
-        except Exception:
-            pass
-            
-        extra_data['risk'] = {'sl': sl, 'tp': tp, 'label': risk_label, 'sizing': sizing}
 
+        # Rischio Daily (con prezzo live)
+        extra_data['risk_daily'] = compute_risk_metrics(df_d, current_price=last_price)
+
+        # Analisi Daily
         signals_d, score_d, extra_d = analyze_df_engine(df_d, tk=tk)
         extra_data.update(extra_d)
 
-        # --- 2. DATI HOURLY (1M, 1H) ---
+        # --- 2. DATI HOURLY ---
         score_h = 0.5
         df_h = tk.history(period="1mo", interval="1h", auto_adjust=True)
         if not df_h.empty and len(df_h) >= 20:
             df_h = df_h[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+
+            # Rischio Hourly (usando prezzo di chiusura hourly)
+            extra_data['risk_hourly'] = compute_risk_metrics(df_h)
+
             _, score_h, _ = analyze_df_engine(df_h, tk=None)
 
         return signals_d, score_d, score_h, extra_data, df_d
@@ -367,71 +438,123 @@ def analyze_flash_ticker(ticker: str) -> Tuple[List[str], float, float, Dict, Op
         return [], 0.5, 0.5, extra_data, None
 
 
+# ============================================================================
+# FORMATTAZIONE REPORT
+# ============================================================================
+def _format_risk_block(risk: Dict) -> List[str]:
+    """Ritorna le 3 righe del blocco rischio (SL/TP, volatilità, max capitale)."""
+    if not risk or risk.get('atr', 0.0) == 0.0:
+        return [
+            f"   ├ 🎯 SL: N/D | TP: N/D",
+            f"   └ ⚪ Volatilità: N/D | Size: N/D",
+        ]
+
+    return [
+        f"   ├ 🎯 SL: {risk['sl']:.3f} | TP: {risk['tp']:.3f}",
+        f"   ├ {risk['vol_bullet']} Volatilità: {risk['vol_label']} (ATR {risk['atr']:.3f}) | Size: {risk['sizing']:.2f}%",
+        f"   └ 💰 Rischio {RISK_PER_TRADE_PCT:.0f}% → max *{risk['max_capital']:.0f}%* del capitale",
+    ]
+
+
 def create_daily_report_section(
-    title: str, 
-    results: List[Tuple[str, List[str], float, float, Dict, Optional[pd.DataFrame]]], 
+    title: str,
+    results: List[Tuple[str, List[str], float, float, Dict, Optional[pd.DataFrame]]],
     descriptions: Dict
 ) -> str:
     if not results:
         return f"{title}\nNessun dato disponibile."
-    
-    # Ordinamento primario per Score Daily (score_d) descrescente
+
     sorted_results = sorted(results, key=lambda x: x[2], reverse=True)
     lines = [f"{title}\n"]
-    
+
     for ticker, _, score_d, score_h, extra_data, _ in sorted_results:
         desc = descriptions.get(ticker, ticker)
         bullet_d = get_bullet(score_d)
         bullet_h = get_bullet(score_h)
         var_pct = extra_data.get('daily_var_pct', 0.0)
         sign = "+" if var_pct > 0 else ""
-        
+
         url = f"https://antoniotonti.github.io/agente_borsa/flash/{ticker}.html"
-        
-        risk_info = extra_data.get('risk', {})
-        r_label = risk_info.get('label', '-')
-        r_size = risk_info.get('sizing', 0)
-        sl = risk_info.get('sl', 0.0)
-        tp = risk_info.get('tp', 0.0)
-        
-        # Intestazione con Ticker e Variazione %
-        header_line = f"🔹 [{ticker}]({url}) - *{desc}* (Oggi: {sign}{var_pct:.2f}%)"
-        daily_line = f"   ├ 📈 *1D Daily:* {bullet_d} `{score_d:.3f}`"
-        hourly_line = f"   ├ ⚡ *1H Intraday:* {bullet_h} `{score_h:.3f}`"
-        risk_line = f"   ├ 🛡️ *Rischio:* {r_label} | Size: {r_size}%"
-        sltp_line = f"   └ 🎯 *SL:* {sl:.3f} | *TP:* {tp:.3f}\n"
-        
-        lines.extend([header_line, daily_line, hourly_line, risk_line, sltp_line])
-        
+
+        risk_d = extra_data.get('risk_daily', {})
+        risk_h = extra_data.get('risk_hourly', {})
+
+        # Intestazione
+        lines.append(f"🔹 [{ticker}]({url}) - *{desc}* (Oggi: {sign}{var_pct:.2f}%)")
+        lines.append("")
+
+        # Blocco Daily
+        lines.append(f"   📈 *1D Daily:* {bullet_d} `{score_d:.3f}`")
+        lines.extend(_format_risk_block(risk_d))
+        lines.append("")
+
+        # Blocco Hourly
+        lines.append(f"   ⚡ *1H Intraday:* {bullet_h} `{score_h:.3f}`")
+        lines.extend(_format_risk_block(risk_h))
+        lines.append("")
+
     return "\n".join(lines)
 
 
-def create_portfolio_daily_report(results: List[Tuple[str, List[str], float, float, Dict, Optional[pd.DataFrame]]], descriptions: Dict) -> str:
+def create_portfolio_daily_report(results, descriptions) -> str:
     now_str = datetime.now().strftime("%H:%M")
     return create_daily_report_section(f"💰 *PORTAFOGLIO GIORNALIERO ({now_str})*", results, descriptions)
 
 
-def create_watchlist_daily_report(results: List[Tuple[str, List[str], float, float, Dict, Optional[pd.DataFrame]]], descriptions: Dict) -> str:
+def create_watchlist_daily_report(results, descriptions) -> str:
     now_str = datetime.now().strftime("%H:%M")
     return create_daily_report_section(f"👁️ *OSSERVATI GIORNALIERI ({now_str})*", results, descriptions)
 
 
+# ============================================================================
+# TELEGRAM (con chunking)
+# ============================================================================
 def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
-    try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+    MAX_LENGTH = 3800
+    chunks = []
+    if len(message) > MAX_LENGTH:
+        lines = message.split('\n')
+        current_chunk = []
+        current_length = 0
+        for line in lines:
+            if current_length + len(line) + 1 > MAX_LENGTH:
+                chunks.append('\n'.join(current_chunk))
+                current_chunk = [line]
+                current_length = len(line)
+            else:
+                current_chunk.append(line)
+                current_length += len(line) + 1
+        if current_chunk:
+            chunks.append('\n'.join(current_chunk))
+    else:
+        chunks = [message]
+
+    success = True
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    for chunk in chunks:
         payload = {
             "chat_id": chat_id,
-            "text": message,
+            "text": chunk,
             "parse_mode": "Markdown",
-            "disable_web_page_preview": True
+            "disable_web_page_preview": True,
         }
-        resp = requests.post(url, json=payload, timeout=15)
-        return resp.status_code == 200
-    except Exception as e:
-        print(f"❌ Errore invio Telegram: {e}")
-        return False
+        try:
+            resp = requests.post(url, json=payload, timeout=15)
+            if resp.status_code != 200:
+                print(f"❌ Errore Telegram ({resp.status_code}): {resp.text}")
+                success = False
+        except Exception as e:
+            print(f"❌ Errore invio Telegram: {e}")
+            success = False
+        time.sleep(1)
+
+    return success
 
 
+# ============================================================================
+# MAIN
+# ============================================================================
 def main():
     start_time = time.time()
     try:
@@ -439,9 +562,9 @@ def main():
         print("📊 AGENTE DI TRADING - ANALISI FLASH (DAILY & HOURLY)")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
-        
+
         portfolio, watchlist, descriptions = load_titoli_csv()
-        
+
         portfolio_results = []
         if portfolio:
             print("\n💰 ANALISI PORTAFOGLIO")
@@ -452,7 +575,7 @@ def main():
                     desc = descriptions.get(ticker, ticker)
                     generate_web_page(ticker, desc, "flash", df_d, score_d, signals_d)
                 time.sleep(0.5)
-                
+
         watchlist_results = []
         if watchlist:
             print("\n👁️ ANALISI WATCHLIST")
@@ -463,10 +586,10 @@ def main():
                     desc = descriptions.get(ticker, ticker)
                     generate_web_page(ticker, desc, "flash", df_d, score_d, signals_d)
                 time.sleep(0.5)
-                
+
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        
+
         if token and chat_id:
             if portfolio_results:
                 print("\n📩 Invio report Portafoglio...")
@@ -475,9 +598,9 @@ def main():
             if watchlist_results:
                 print("\n📩 Invio report Watchlist...")
                 send_telegram_message(token, chat_id, create_watchlist_daily_report(watchlist_results, descriptions))
-                
+
         print(f"\n🏁 Completato in {time.time() - start_time:.1f}s")
-        
+
     except Exception as e:
         print(f"❌ ERRORE GENERALE: {e}")
 
