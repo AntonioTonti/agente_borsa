@@ -564,18 +564,15 @@ def create_daily_report_section(
 
 
 def create_portfolio_daily_report(results, descriptions) -> str:
-    now_str = datetime.now().strftime("%H:%M")
-    return create_daily_report_section(f"💰 *PORTAFOGLIO GIORNALIERO ({now_str})*", results, descriptions)
+    return create_daily_report_section(f"💰 *PORTAFOGLIO", results, descriptions)
 
 
 def create_watchlist_daily_report(results, descriptions) -> str:
-    now_str = datetime.now().strftime("%H:%M")
-    return create_daily_report_section(f"👁️ *OSSERVATI GIORNALIERI ({now_str})*", results, descriptions)
+    return create_daily_report_section(f"👁️ *OSSERVATI", results, descriptions)
 
 
 def create_etf_daily_report(results, descriptions) -> str:
-    now_str = datetime.now().strftime("%H:%M")
-    return create_daily_report_section(f"📊 *ETF ({now_str})*", results, descriptions)
+    return create_daily_report_section(f"📊 *E T F ", results, descriptions)
 
 
 # ============================================================================
