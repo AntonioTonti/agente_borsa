@@ -2,8 +2,8 @@
 """
 Agente di Trading - Analisi Giornaliera (FLASH)
 
-Format Telegram: Ticker in evidenza con 2 blocchi (1D Daily + 1H Intraday).
-Ogni blocco mostra score, SL/TP, volatilità e size rischio massima.
+Format Telegram: Ticker con 2 blocchi (1D Daily + 1H Intraday).
+Chunking intelligente: mai spezzare un ticker a metà.
 
 Integrazione DB + Auto-tuning dei pesi (learning rate 0.02).
 """
@@ -173,10 +173,6 @@ def analyze_df_engine(
     tk: Optional[yf.Ticker] = None,
     pesi: Optional[Dict[str, float]] = None
 ) -> Tuple[List[str], float, Dict, Dict]:
-    """
-    Motore universale di calcolo score e indicatori.
-    Ritorna: (signals, score, extra_data, sub_scores)
-    """
     signals = []
     extra_data = {}
 
@@ -371,7 +367,6 @@ def analyze_df_engine(
 
             signals.append(f"📊 MACD: {macd_desc}")
 
-    # Sub-scores
     sub_scores = {
         "ema_ma": ema_ma_score,
         "trend": trend_score,
@@ -386,7 +381,6 @@ def analyze_df_engine(
         "macd": macd_score,
     }
 
-    # Score finale dinamico
     final_score = sum(sub_scores[k] * pesi.get(k, 0.0) for k in sub_scores)
     final_score = max(0.0, min(1.0, final_score))
 
@@ -404,7 +398,6 @@ def analyze_flash_ticker(
     try:
         tk = yf.Ticker(ticker)
 
-        # --- DATI DAILY ---
         df_d = tk.history(period="6mo", interval="1d", auto_adjust=True)
         if df_d.empty or len(df_d) < DAILY_MIN_POINTS:
             print(f"⚠️ {ticker}: Dati daily vuoti o insufficienti.")
@@ -443,7 +436,6 @@ def analyze_flash_ticker(
         extra_data.update(extra_d)
         extra_data['sub_scores'] = sub_scores_d
 
-        # --- DATI HOURLY (manteniamo score_h, verrà rimosso in Step 5) ---
         score_h = 0.5
         df_h = tk.history(period="1mo", interval="1h", auto_adjust=True)
         if not df_h.empty and len(df_h) >= 20:
@@ -510,7 +502,7 @@ def verifica_previsioni_scadute() -> None:
 
 
 # ============================================================================
-# FORMATTAZIONE REPORT
+# FORMATTAZIONE REPORT (con chunking)
 # ============================================================================
 def _format_risk_block(risk: Dict) -> List[str]:
     if not risk or risk.get('atr', 0.0) == 0.0:
@@ -526,97 +518,152 @@ def _format_risk_block(risk: Dict) -> List[str]:
     ]
 
 
-def create_daily_report_section(
+def _build_single_ticker_block(
+    ticker: str,
+    score_d: float,
+    score_h: float,
+    extra_data: Dict,
+    descriptions: Dict
+) -> str:
+    """Costruisce il blocco testuale per un singolo ticker."""
+    desc = descriptions.get(ticker, ticker)
+    bullet_d = get_bullet(score_d)
+    bullet_h = get_bullet(score_h)
+    var_pct = extra_data.get('daily_var_pct', 0.0)
+    sign = "+" if var_pct > 0 else ""
+
+    url = f"https://antoniotonti.github.io/agente_borsa/flash/{ticker}.html"
+
+    risk_d = extra_data.get('risk_daily', {})
+    risk_h = extra_data.get('risk_hourly', {})
+
+    parts = []
+    parts.append(f"🔹 [{ticker}]({url}) - *{desc}* (Oggi: {sign}{var_pct:.2f}%)")
+    parts.append("")
+
+    parts.append(f"   📈 *1D Daily:* {bullet_d} `{score_d:.3f}`")
+    parts.extend(_format_risk_block(risk_d))
+    parts.append("")
+
+    parts.append(f"   ⚡ *1H Intraday:* {bullet_h} `{score_h:.3f}`")
+    parts.extend(_format_risk_block(risk_h))
+    parts.append("")
+
+    return "\n".join(parts)
+
+
+def create_daily_report_blocks(
     title: str,
     results: List[Tuple[str, List[str], float, float, Dict, Optional[pd.DataFrame]]],
     descriptions: Dict
-) -> str:
+) -> Tuple[str, List[str]]:
+    """
+    Ritorna (titolo, lista di blocchi — uno per ticker).
+    I blocchi vengono assemblati dal sender in chunk sotto il limite Telegram.
+    """
     if not results:
-        return f"{title}\nNessun dato disponibile."
+        return title, ["Nessun dato disponibile."]
 
     sorted_results = sorted(results, key=lambda x: x[2], reverse=True)
-    lines = [f"{title}\n"]
-
+    blocks = []
     for ticker, _, score_d, score_h, extra_data, _ in sorted_results:
-        desc = descriptions.get(ticker, ticker)
-        bullet_d = get_bullet(score_d)
-        bullet_h = get_bullet(score_h)
-        var_pct = extra_data.get('daily_var_pct', 0.0)
-        sign = "+" if var_pct > 0 else ""
-
-        url = f"https://antoniotonti.github.io/agente_borsa/flash/{ticker}.html"
-
-        risk_d = extra_data.get('risk_daily', {})
-        risk_h = extra_data.get('risk_hourly', {})
-
-        lines.append(f"🔹 [{ticker}]({url}) - *{desc}* (Oggi: {sign}{var_pct:.2f}%)")
-        lines.append("")
-
-        lines.append(f"   📈 *1D Daily:* {bullet_d} `{score_d:.3f}`")
-        lines.extend(_format_risk_block(risk_d))
-        lines.append("")
-
-        lines.append(f"   ⚡ *1H Intraday:* {bullet_h} `{score_h:.3f}`")
-        lines.extend(_format_risk_block(risk_h))
-        lines.append("")
-
-    return "\n".join(lines)
+        blocks.append(_build_single_ticker_block(ticker, score_d, score_h, extra_data, descriptions))
+    return title, blocks
 
 
-def create_portfolio_daily_report(results, descriptions) -> str:
-    return create_daily_report_section(f"💰 *PORTAFOGLIO", results, descriptions)
+def create_portfolio_daily_report(results, descriptions):
+    now_str = datetime.now().strftime("%H:%M")
+    return create_daily_report_blocks(f"💰 *PORTAFOGLIO GIORNALIERO ({now_str})*", results, descriptions)
 
 
-def create_watchlist_daily_report(results, descriptions) -> str:
-    return create_daily_report_section(f"👁️ *OSSERVATI", results, descriptions)
+def create_watchlist_daily_report(results, descriptions):
+    now_str = datetime.now().strftime("%H:%M")
+    return create_daily_report_blocks(f"👁️ *OSSERVATI GIORNALIERI ({now_str})*", results, descriptions)
 
 
-def create_etf_daily_report(results, descriptions) -> str:
-    return create_daily_report_section(f"📊 *E T F ", results, descriptions)
+def create_etf_daily_report(results, descriptions):
+    now_str = datetime.now().strftime("%H:%M")
+    return create_daily_report_blocks(f"📊 *ETF ({now_str})*", results, descriptions)
 
 
 # ============================================================================
-# TELEGRAM
+# TELEGRAM — chunking intelligente
 # ============================================================================
-def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
-    MAX_LENGTH = 3800
+def _chunk_blocks(title: str, blocks: List[str], max_len: int = 3800) -> List[str]:
+    """
+    Assembla titolo + blocchi in chunk sotto max_len, senza spezzare
+    un blocco a metà. Ritorna la lista dei testi pronti all'invio.
+    """
     chunks = []
-    if len(message) > MAX_LENGTH:
-        lines = message.split('\n')
-        current_chunk = []
-        current_length = 0
-        for line in lines:
-            if current_length + len(line) + 1 > MAX_LENGTH:
-                chunks.append('\n'.join(current_chunk))
-                current_chunk = [line]
-                current_length = len(line)
-            else:
-                current_chunk.append(line)
-                current_length += len(line) + 1
-        if current_chunk:
-            chunks.append('\n'.join(current_chunk))
-    else:
-        chunks = [message]
+    current = title + "\n"
+    current_len = len(current)
 
+    for block in blocks:
+        block_len = len(block) + 1
+
+        # Blocco singolo troppo grande: spediscilo da solo
+        if block_len > max_len:
+            if current_len > len(title) + 1:
+                chunks.append(current.rstrip())
+                current = title + "\n"
+                current_len = len(current)
+            chunks.append(block)
+            continue
+
+        # Aggiungerlo supererebbe il limite: chiudi chunk e aprine uno nuovo
+        if current_len + block_len > max_len:
+            chunks.append(current.rstrip())
+            current = title + "\n"
+            current_len = len(current)
+
+        current += block + "\n"
+        current_len += block_len
+
+    if current_len > len(title) + 1:
+        chunks.append(current.rstrip())
+
+    return chunks if chunks else [title]
+
+
+def send_telegram_message(token: str, chat_id: str, payload_data) -> bool:
+    """
+    payload_data può essere:
+    - una stringa (invio singolo)
+    - una tupla (title, blocks) → chunking intelligente
+    """
+    if isinstance(payload_data, tuple):
+        title, blocks = payload_data
+        chunks = _chunk_blocks(title, blocks)
+    else:
+        chunks = [payload_data]
+
+    total = len(chunks)
     success = True
     url = f"https://api.telegram.org/bot{token}/sendMessage"
 
-    for chunk in chunks:
+    for i, chunk in enumerate(chunks, start=1):
+        if total > 1:
+            text = f"{chunk}\n\n_({i}/{total})_"
+        else:
+            text = chunk
+
         payload = {
             "chat_id": chat_id,
-            "text": chunk,
+            "text": text,
             "parse_mode": "Markdown",
             "disable_web_page_preview": True,
         }
         try:
             resp = requests.post(url, json=payload, timeout=15)
             if resp.status_code != 200:
-                print(f"❌ Errore Telegram ({resp.status_code}): {resp.text}")
+                print(f"❌ Errore Telegram ({resp.status_code}) chunk {i}/{total}: {resp.text}")
                 success = False
+            else:
+                print(f"   ✅ Chunk {i}/{total} inviato ({len(text)} caratteri)")
         except Exception as e:
-            print(f"❌ Errore invio Telegram: {e}")
+            print(f"❌ Errore invio Telegram chunk {i}/{total}: {e}")
             success = False
-        time.sleep(1)
+        time.sleep(1.5)
 
     return success
 
@@ -625,7 +672,6 @@ def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
 # GRUPPO TICKER
 # ============================================================================
 def process_ticker_group(tickers: List[str], categoria: str, descriptions: Dict) -> List:
-    """Analizza un gruppo di ticker, genera pagine web, salva su DB."""
     results = []
     if not tickers:
         return results
@@ -676,27 +722,21 @@ def main():
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
 
-        # Init DB
         init_db()
 
-        # Verifica previsioni scadute
         print("\n🔍 VERIFICA PREVISIONI SCADUTE")
         verifica_previsioni_scadute()
 
-        # Auto-tuning pesi
         print("\n🎯 AUTO-TUNING PESI")
         for cat in ["PORTAFOGLIO", "WATCHLIST", "ETF"]:
             evaluate_and_tune(cat)
 
-        # Carica titoli
         portfolio, watchlist, descriptions, etf_list = load_titoli_csv()
 
-        # Analizza i 3 gruppi
         portfolio_results = process_ticker_group(portfolio, "PORTAFOGLIO", descriptions)
         watchlist_results = process_ticker_group(watchlist, "WATCHLIST", descriptions)
         etf_results = process_ticker_group(etf_list, "ETF", descriptions)
 
-        # Invio Telegram
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
