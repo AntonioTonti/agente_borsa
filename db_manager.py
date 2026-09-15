@@ -18,40 +18,55 @@ from typing import List, Dict, Optional, Tuple
 # CONFIGURAZIONE
 # ============================================================================
 DB_PATH = "trading_history.db"
-ORIZZONTE_VERIFICA_GIORNI = 3
-SOGLIA_MOVIMENTO_PCT = 0.5   # per classificare BULLISH/BEARISH/NEUTRAL
+ORIZZONTE_VERIFICA_GIORNI = 3       # ← 0 solo per test, 3 in produzione
+SOGLIA_MOVIMENTO_PCT = 0.5          # ±0.5% per classificare BULLISH/BEARISH
+
+# Pesi di default (usati al primo avvio, prima che il tuner li modifichi)
+DEFAULT_WEIGHTS = {
+    "ema_ma": 0.15,
+    "trend": 0.13,
+    "analyst": 0.05,
+    "delta_ema_ma": 0.12,
+    "ha_force": 0.15,
+    "ha_state": 0.10,
+    "zigzag": 0.10,
+    "vol": 0.05,
+    "close_change": 0.05,
+    "rsi": 0.05,
+    "macd": 0.05,
+}
 
 
 # ============================================================================
 # CONNESSIONE
 # ============================================================================
 def _get_connection() -> sqlite3.Connection:
-    """Ritorna una connessione SQLite con row_factory impostato."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db() -> None:
-    """Crea le tabelle se non esistono. Rimuove file corrotti."""
-    # Verifica se il file esiste ma non è un DB valido
+    """Crea le tabelle se non esistono. Rimuove file corrotti. Migra DB esistenti."""
+    # --- Guardia: file corrotto ---
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH)
             conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")
             conn.close()
         except sqlite3.DatabaseError:
-            print(f"⚠️ {DB_PATH} corrotto o non valido. Lo rimuovo.")
+            print(f"⚠️ {DB_PATH} corrotto o non valido. Lo rimuovo e lo ricreo.")
             try:
                 os.remove(DB_PATH)
             except Exception as e:
                 print(f"❌ Impossibile rimuovere {DB_PATH}: {e}")
                 raise
+
+    # --- Creazione tabelle ---
     conn = _get_connection()
     try:
         cur = conn.cursor()
 
-        # Tabella previsioni emesse
         cur.execute("""
             CREATE TABLE IF NOT EXISTS previsioni (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,11 +83,11 @@ def init_db() -> None:
                 prezzo_verifica REAL,
                 rendimento_pct REAL,
                 esito TEXT,
-                esito_corretto INTEGER
+                esito_corretto INTEGER,
+                tuned INTEGER NOT NULL DEFAULT 0
             )
         """)
 
-        # Tabella pesi per categoria
         cur.execute("""
             CREATE TABLE IF NOT EXISTS pesi (
                 categoria TEXT NOT NULL,
@@ -83,7 +98,6 @@ def init_db() -> None:
             )
         """)
 
-        # Indici per performance
         cur.execute("""
             CREATE INDEX IF NOT EXISTS idx_prev_verificato
             ON previsioni(verificato, timestamp_scadenza)
@@ -92,6 +106,13 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_prev_ticker
             ON previsioni(ticker, timestamp_emissione)
         """)
+
+        # Migrazione: aggiungi 'tuned' se manca (per DB esistenti)
+        try:
+            cur.execute("SELECT tuned FROM previsioni LIMIT 1")
+        except sqlite3.OperationalError:
+            print("   🔧 Migrazione: aggiungo colonna 'tuned'")
+            cur.execute("ALTER TABLE previsioni ADD COLUMN tuned INTEGER NOT NULL DEFAULT 0")
 
         conn.commit()
         print(f"✅ DB inizializzato: {DB_PATH}")
@@ -111,10 +132,7 @@ def save_previsione(
     sub_scores: Dict[str, float],
     orizzonte_giorni: int = ORIZZONTE_VERIFICA_GIORNI,
 ) -> int:
-    """
-    Salva una previsione emessa.
-    Ritorna l'id della riga inserita.
-    """
+    """Salva una previsione emessa. Ritorna l'id."""
     now = datetime.now()
     scadenza = now + timedelta(days=orizzonte_giorni)
 
@@ -125,8 +143,8 @@ def save_previsione(
             INSERT INTO previsioni (
                 ticker, categoria, timestamp_emissione, prezzo_emissione,
                 score, direzione, sub_scores_json, orizzonte_giorni,
-                timestamp_scadenza, verificato
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+                timestamp_scadenza, verificato, tuned
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
         """, (
             ticker,
             categoria,
@@ -145,10 +163,7 @@ def save_previsione(
 
 
 def get_previsioni_da_verificare(categoria: Optional[str] = None) -> List[Dict]:
-    """
-    Ritorna le previsioni non verificate la cui scadenza è passata.
-    Se `categoria` è passata, filtra per quella categoria.
-    """
+    """Previsioni non verificate la cui scadenza è passata."""
     now_iso = datetime.now().isoformat()
 
     conn = _get_connection()
@@ -169,9 +184,41 @@ def get_previsioni_da_verificare(categoria: Optional[str] = None) -> List[Dict]:
                   AND timestamp_scadenza <= ?
                 ORDER BY timestamp_scadenza ASC
             """, (now_iso,))
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
 
-        rows = cur.fetchall()
-        return [dict(r) for r in rows]
+
+def get_previsioni_verificate_per_tuning(categoria: str) -> List[Dict]:
+    """Previsioni verificate ma non ancora 'tuned' di una categoria."""
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT * FROM previsioni
+            WHERE categoria = ?
+              AND verificato = 1
+              AND tuned = 0
+            ORDER BY timestamp_emissione ASC
+        """, (categoria,))
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def mark_as_tuned(previsione_ids: List[int]) -> None:
+    """Segna le previsioni come 'tuned' per non rielaborarle."""
+    if not previsione_ids:
+        return
+    conn = _get_connection()
+    try:
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in previsione_ids)
+        cur.execute(
+            f"UPDATE previsioni SET tuned = 1 WHERE id IN ({placeholders})",
+            previsione_ids,
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -208,7 +255,7 @@ def registra_verifica(
 
 
 def get_storico_ticker(ticker: str, limit: int = 100) -> List[Dict]:
-    """Ritorna le ultime N previsioni per un ticker (anche non verificate)."""
+    """Ultime N previsioni per un ticker."""
     conn = _get_connection()
     try:
         cur = conn.cursor()
@@ -224,13 +271,7 @@ def get_storico_ticker(ticker: str, limit: int = 100) -> List[Dict]:
 
 
 def get_statistiche_categoria(categoria: str) -> Dict:
-    """
-    Ritorna statistiche aggregate per una categoria:
-    - numero previsioni verificate
-    - numero corrette
-    - accuratezza (%)
-    - rendimento medio dei segnali corretti
-    """
+    """Statistiche aggregate per categoria."""
     conn = _get_connection()
     try:
         cur = conn.cursor()
@@ -277,11 +318,14 @@ def _init_pesi_categoria(categoria: str, default_weights: Dict[str, float]) -> N
         conn.close()
 
 
-def get_pesi_correnti(categoria: str, default_weights: Dict[str, float]) -> Dict[str, float]:
+def get_pesi_correnti(categoria: str, default_weights: Optional[Dict[str, float]] = None) -> Dict[str, float]:
     """
     Ritorna i pesi correnti per una categoria.
     Se la categoria non esiste, la inizializza con i default.
     """
+    if default_weights is None:
+        default_weights = DEFAULT_WEIGHTS
+
     conn = _get_connection()
     try:
         cur = conn.cursor()
@@ -305,7 +349,7 @@ def get_pesi_correnti(categoria: str, default_weights: Dict[str, float]) -> Dict
 
 
 def salva_pesi_aggiornati(categoria: str, nuovi_pesi: Dict[str, float]) -> None:
-    """Salva i pesi aggiornati per una categoria (replace completo)."""
+    """Salva i pesi aggiornati per una categoria."""
     now_iso = datetime.now().isoformat()
     conn = _get_connection()
     try:
@@ -327,10 +371,7 @@ def salva_pesi_aggiornati(categoria: str, nuovi_pesi: Dict[str, float]) -> None:
 # UTILITY
 # ============================================================================
 def classifica_esito(rendimento_pct: float) -> str:
-    """
-    Classifica un rendimento reale in BULLISH / BEARISH / NEUTRAL
-    in base alla soglia SOGLIA_MOVIMENTO_PCT.
-    """
+    """Classifica rendimento reale in BULLISH / BEARISH / NEUTRAL."""
     if rendimento_pct > SOGLIA_MOVIMENTO_PCT:
         return "BULLISH"
     elif rendimento_pct < -SOGLIA_MOVIMENTO_PCT:
@@ -341,7 +382,7 @@ def classifica_esito(rendimento_pct: float) -> str:
 
 def direzione_da_score(score: float) -> str:
     """
-    Converte uno score continuo (0..1) in direzione operativa.
+    Converte score continuo (0..1) in direzione operativa.
     - score >= 0.60 → BULLISH
     - score <  0.40 → BEARISH
     - altrimenti    → NEUTRAL
@@ -362,10 +403,8 @@ if __name__ == "__main__":
     print("🧪 TEST db_manager.py")
     print("=" * 60)
 
-    # 1. Init
     init_db()
 
-    # 2. Salva una previsione di test
     sub_scores_test = {
         "ema_ma": 1.0, "trend": 0.75, "delta_ema_ma": 0.8,
         "ha_force": 1.0, "ha_state": 0.75, "zigzag": 1.0,
@@ -382,16 +421,9 @@ if __name__ == "__main__":
     )
     print(f"✅ Previsione salvata, id={pid}")
 
-    # 3. Leggi pesi correnti (con init ai default)
-    default_w = {
-        "ema_ma": 0.15, "trend": 0.13, "analyst": 0.05, "delta_ema_ma": 0.12,
-        "ha_force": 0.15, "ha_state": 0.10, "zigzag": 0.10,
-        "vol": 0.05, "close_change": 0.05, "rsi": 0.05, "macd": 0.05,
-    }
-    pesi = get_pesi_correnti("PORTFOLIO", default_w)
+    pesi = get_pesi_correnti("PORTFOLIO", DEFAULT_WEIGHTS)
     print(f"✅ Pesi PORTFOLIO: {pesi}")
 
-    # 4. Statistiche categoria
     stats = get_statistiche_categoria("PORTFOLIO")
     print(f"✅ Statistiche PORTFOLIO: {stats}")
 
