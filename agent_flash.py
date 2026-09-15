@@ -635,4 +635,93 @@ def send_telegram_message(token: str, chat_id: str, message: str) -> bool:
 # ============================================================================
 # HELPER: analisi + salvataggio DB
 # ============================================================================
-def process_ticker_group(tickers: List
+def process_ticker_group(tickers: List[str], categoria: str, descriptions: Dict) -> List:
+    """
+    Analizza un gruppo di ticker, genera pagine web, salva su DB.
+    Ritorna la lista di risultati (formato compatibile con create_*_report).
+    """
+    results = []
+    if not tickers:
+        return results
+
+    print(f"\n📊 ANALISI {categoria} ({len(tickers)} ticker)")
+    for ticker in tickers:
+        signals_d, score_d, score_h, extra_data, df_d = analyze_flash_ticker(ticker)
+        results.append((ticker, signals_d, score_d, score_h, extra_data, df_d))
+
+        if df_d is not None and not df_d.empty:
+            desc = descriptions.get(ticker, ticker)
+            generate_web_page(ticker, desc, "flash", df_d, score_d, signals_d)
+
+            prezzo_emissione = extra_data.get('last_price', float(df_d['Close'].iloc[-1]))
+            sub_scores = extra_data.get('sub_scores', {})
+
+            try:
+                save_previsione(
+                    ticker=ticker,
+                    categoria=categoria,
+                    prezzo_emissione=prezzo_emissione,
+                    score=score_d,
+                    direzione=direzione_da_score(score_d),
+                    sub_scores=sub_scores,
+                    orizzonte_giorni=ORIZZONTE_VERIFICA_GIORNI,
+                )
+                print(f"      💾 {ticker}: salvato (score={score_d:.3f})")
+            except Exception as e:
+                print(f"      ⚠️ {ticker}: errore salvataggio DB: {e}")
+        time.sleep(0.5)
+
+    return results
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+def main():
+    start_time = time.time()
+    try:
+        print("=" * 60)
+        print("📊 AGENTE DI TRADING - ANALISI FLASH (DAILY & HOURLY)")
+        print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        print("=" * 60)
+
+        # Init DB
+        init_db()
+
+        # Verifica previsioni scadute
+        print("\n🔍 VERIFICA PREVISIONI SCADUTE")
+        verifica_previsioni_scadute()
+
+        # Carica titoli
+        portfolio, watchlist, descriptions, etf_list = load_titoli_csv()
+
+        # Analizza i 3 gruppi
+        portfolio_results = process_ticker_group(portfolio, "PORTAFOGLIO", descriptions)
+        watchlist_results = process_ticker_group(watchlist, "WATCHLIST", descriptions)
+        etf_results = process_ticker_group(etf_list, "ETF", descriptions)
+
+        # Invio Telegram
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+        if token and chat_id:
+            if portfolio_results:
+                print("\n📩 Invio report Portafoglio...")
+                send_telegram_message(token, chat_id, create_portfolio_daily_report(portfolio_results, descriptions))
+                time.sleep(2)
+            if watchlist_results:
+                print("\n📩 Invio report Watchlist...")
+                send_telegram_message(token, chat_id, create_watchlist_daily_report(watchlist_results, descriptions))
+                time.sleep(2)
+            if etf_results:
+                print("\n📩 Invio report ETF...")
+                send_telegram_message(token, chat_id, create_etf_daily_report(etf_results, descriptions))
+
+        print(f"\n🏁 Completato in {time.time() - start_time:.1f}s")
+
+    except Exception as e:
+        print(f"❌ ERRORE GENERALE: {e}")
+
+
+if __name__ == "__main__":
+    main()
