@@ -137,11 +137,15 @@ def analyze_df_engine(df: pd.DataFrame) -> float:
 # ANALISI MULTI-TIMEFRAME & RISCHIO
 # ==========================================
 def analyze_flash_ticker(ticker: str):
+    """
+    Scarica dati 1D e 1H, calcola gli score e definisce i livelli di rischio.
+    Usa fast_info per una variazione % giornaliera corretta.
+    """
     try:
-        df_1d = yf.download(ticker, period="6mo", interval="1d",
-                            auto_adjust=True, progress=False)
-        df_1h = yf.download(ticker, period="1mo", interval="1h",
-                            auto_adjust=True, progress=False)
+        tk = yf.Ticker(ticker)
+
+        df_1d = tk.history(period="6mo", interval="1d", auto_adjust=True)
+        df_1h = tk.history(period="1mo", interval="1h", auto_adjust=True)
 
         if df_1d.empty or df_1h.empty:
             print(f"   ⚠️ {ticker}: dati insufficienti (1D o 1H vuoti)")
@@ -152,12 +156,36 @@ def analyze_flash_ticker(ticker: str):
         if isinstance(df_1h.columns, pd.MultiIndex):
             df_1h.columns = df_1h.columns.get_level_values(0)
 
+        df_1d = df_1d[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+        df_1h = df_1h[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+
+        # --- Prezzo live + chiusura precedente (come il Flash) ---
+        fast_info = getattr(tk, 'fast_info', {})
+        last_price = fast_info.get('lastPrice', None)
+        prev_close = fast_info.get('previousClose', None)
+
+        if last_price is None or np.isnan(last_price):
+            last_price = float(df_1d['Close'].iloc[-1])
+
+        if prev_close is None or np.isnan(prev_close) or prev_close <= 0:
+            if len(df_1d) >= 2:
+                prev_close = float(df_1d['Close'].iloc[-2])
+            else:
+                prev_close = last_price
+
+        daily_pct_change = ((last_price - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
+
+        # Allinea la candela di oggi col prezzo live (per far combaciare gli indicatori)
+        today_date = datetime.now().date()
+        last_df_date = df_1d.index[-1].date()
+        if last_df_date == today_date:
+            df_1d.iloc[-1, df_1d.columns.get_loc('Close')] = last_price
+
+        # --- Score 1D e 1H ---
         score_1d = analyze_df_engine(df_1d)
         score_1h = analyze_df_engine(df_1h)
 
         # --- Gestione Rischio (ATR Daily) ---
-        df_1d = df_1d[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
-
         atr_obj = ta.volatility.AverageTrueRange(
             high=df_1d['High'].squeeze(),
             low=df_1d['Low'].squeeze(),
@@ -171,9 +199,7 @@ def analyze_flash_ticker(ticker: str):
             return None
 
         atr = float(atr_series.iloc[-1])
-        current_price = float(df_1d['Close'].iloc[-1])
-        prev_price = float(df_1d['Close'].iloc[-2])
-        daily_pct_change = ((current_price - prev_price) / prev_price) * 100.0
+        current_price = last_price
 
         stop_loss = current_price - (atr * 1.5)
         take_profit = current_price + (atr * 3.0)
