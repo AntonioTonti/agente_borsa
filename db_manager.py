@@ -33,7 +33,20 @@ def _get_connection() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Crea le tabelle se non esistono."""
+    """Crea le tabelle se non esistono. Rimuove file corrotti."""
+    # Verifica se il file esiste ma non è un DB valido
+    if os.path.exists(DB_PATH):
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("SELECT 1 FROM sqlite_master LIMIT 1")
+            conn.close()
+        except sqlite3.DatabaseError:
+            print(f"⚠️ {DB_PATH} corrotto o non valido. Lo rimuovo.")
+            try:
+                os.remove(DB_PATH)
+            except Exception as e:
+                print(f"❌ Impossibile rimuovere {DB_PATH}: {e}")
+                raise
     conn = _get_connection()
     try:
         cur = conn.cursor()
