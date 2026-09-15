@@ -14,12 +14,13 @@ Regole:
 """
 
 import json
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from db_manager import (
     get_previsioni_verificate_per_tuning,
     get_pesi_correnti,
     salva_pesi_aggiornati,
+    mark_as_tuned,
     DEFAULT_WEIGHTS,
 )
 
@@ -34,20 +35,16 @@ MAX_WEIGHT = 0.40
 # ============================================================================
 def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
     """Normalizza i pesi affinché sommino a 1.0. Applica min/max."""
-    # Clipping
     clipped = {k: max(MIN_WEIGHT, min(MAX_WEIGHT, v)) for k, v in weights.items()}
 
-    # Normalizzazione
     tot = sum(clipped.values())
     if tot <= 0:
         return clipped
 
     normalized = {k: v / tot for k, v in clipped.items()}
 
-    # Secondo passaggio di clipping dopo normalizzazione
     clipped2 = {k: max(MIN_WEIGHT, min(MAX_WEIGHT, v)) for k, v in normalized.items()}
 
-    # Ri-normalizza ancora (perché clipping può aver alterato la somma)
     tot2 = sum(clipped2.values())
     if tot2 <= 0:
         return clipped2
@@ -75,18 +72,14 @@ def evaluate_and_tune(categoria: str, verbose: bool = True) -> bool:
     if verbose:
         print(f"   🎯 {categoria}: {len(previsioni)} previsioni verificate da analizzare")
 
-    # Pesi attuali (o default)
     pesi_attuali = get_pesi_correnti(categoria, DEFAULT_WEIGHTS)
 
-    # Accumulatori per il reward/penalty di ogni indicatore
     delta_pesi: Dict[str, float] = {k: 0.0 for k in pesi_attuali.keys()}
 
     for prev in previsioni:
         rendimento_pct = prev.get('rendimento_pct', 0.0) or 0.0
-        direzione_prevista = prev.get('direzione', 'NEUTRAL')
 
         if rendimento_pct == 0.0:
-            # Nessun movimento → non è informativo, skip
             continue
 
         try:
@@ -97,23 +90,16 @@ def evaluate_and_tune(categoria: str, verbose: bool = True) -> bool:
         if not sub_scores:
             continue
 
-        # Direzione reale: positiva se rendimento > 0, negativa altrimenti
         direzione_reale = 1 if rendimento_pct > 0 else -1
-
-        # Contributo assoluto (magnitudine)
-        reward_magnitude = LEARNING_RATE * abs(rendimento_pct) / 100.0  # normalizzato
+        reward_magnitude = LEARNING_RATE * abs(rendimento_pct) / 100.0
 
         for ind, sub_score in sub_scores.items():
             if ind not in delta_pesi:
                 continue
 
-            # Il sub_score è tra 0 e 1. Lo convertiamo in "spinta":
-            # - sub_score > 0.5 → spinge verso l'alto (bullish)
-            # - sub_score < 0.5 → spinge verso il basso (bearish)
-            spinta = (sub_score - 0.5) * 2.0  # range [-1, +1]
+            # Sub-score 0..1 → spinta -1..+1
+            spinta = (sub_score - 0.5) * 2.0
 
-            # Se la spinta concorda con la direzione reale → reward
-            # Altrimenti → penalty
             if spinta * direzione_reale > 0:
                 delta_pesi[ind] += reward_magnitude
             else:
@@ -124,9 +110,14 @@ def evaluate_and_tune(categoria: str, verbose: bool = True) -> bool:
     for ind, peso in pesi_attuali.items():
         nuovi_pesi[ind] = peso + delta_pesi.get(ind, 0.0)
 
-    # Normalizza e salva
+    # Normalizza
     nuovi_pesi = _normalize_weights(nuovi_pesi)
 
+    # Marca le previsioni come "tuned"
+    ids_usati = [p['id'] for p in previsioni]
+    mark_as_tuned(ids_usati)
+
+    # Salva
     salva_pesi_aggiornati(categoria, nuovi_pesi)
 
     if verbose:
