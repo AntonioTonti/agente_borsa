@@ -1,0 +1,2 @@
+      - name: Lista file del repo
+        run: find . -type f -not -path "./.git/*" | sort
