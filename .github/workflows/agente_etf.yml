@@ -1,0 +1,49 @@
+name: Agente ETF Orario
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: etf-agent
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run-etf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout codice
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Installa dipendenze
+        run: |
+          python -m pip install --upgrade pip
+          pip install yfinance pandas ta requests plotly
+
+      - name: Esegui Agente ETF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python agente_etf.py
+
+      - name: Commit e Push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add docs/ etf_history.db 2>/dev/null || true
+          
+          if ! git diff --staged --quiet; then
+            git commit -m "auto: aggiornamento ETF [skip ci]"
+            git pull --rebase origin main || true
+            git push origin main || (git pull --rebase origin main && git push origin main)
+          else
+            echo "Nessuna modifica da salvare."
+          fi
