@@ -1,0 +1,22 @@
+name: Lista file del repository
+
+on:
+  workflow_dispatch:
+
+jobs:
+  list-files:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout codice
+        uses: actions/checkout@v4
+
+      - name: Elenca tutti i file
+        run: |
+          echo "=== FILE DEL REPO ==="
+          find . -type f -not -path "./.git/*" -not -path "./docs/*" | sort
+          echo ""
+          echo "=== WORKFLOW ATTIVI ==="
+          ls -la .github/workflows/
+          echo ""
+          echo "=== CONTENUTO ROOT ==="
+          ls -la
