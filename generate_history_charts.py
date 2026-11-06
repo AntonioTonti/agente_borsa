@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """
 Generatore di grafici storici degli Score.
-Crea una pagina HTML per categoria, con un grafico separato (impilato) per ogni ticker.
+Estrae i dati dai DB, legge le descrizioni dal CSV e crea i grafici.
 """
 
 import os
 import sqlite3
 import pandas as pd
 import plotly.graph_objects as go
+import sys
+
+sys.path.append('.')
+from config import load_titoli_csv
 
 BASE_DOCS_DIR = "docs"
 KENZO_DB = "kenzo_history.db"
@@ -16,6 +20,9 @@ ETF_DB = "etf_history.db"
 # Soglie operative
 BUY_THRESHOLD = 0.60
 SELL_THRESHOLD = 0.40
+
+# Mostra solo gli ultimi N giorni di storico (per evitare i vecchi picchi orari)
+MAX_DAYS_HISTORY = 60 
 
 
 def get_data_from_db(db_path: str, categoria: str) -> pd.DataFrame:
@@ -26,10 +33,12 @@ def get_data_from_db(db_path: str, categoria: str) -> pd.DataFrame:
 
     try:
         conn = sqlite3.connect(db_path)
-        query = """
+        # Filtriamo per gli ultimi X giorni
+        query = f"""
             SELECT ticker, timestamp_emissione, score 
             FROM previsioni 
-            WHERE categoria = ?
+            WHERE categoria = ? 
+              AND timestamp_emissione >= datetime('now', '-{MAX_DAYS_HISTORY} days')
             ORDER BY timestamp_emissione ASC
         """
         df = pd.read_sql_query(query, conn, params=(categoria,))
@@ -43,7 +52,7 @@ def get_data_from_db(db_path: str, categoria: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str) -> str:
+def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str, descriptions: dict) -> str:
     """Crea una pagina HTML con un grafico separato per ogni ticker."""
     if df.empty:
         print(f"⚠️ Nessun dato per {title}. Salto la generazione.")
@@ -58,6 +67,10 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str) -> str:
         # Assicuriamoci che i dati siano ordinati per data
         ticker_df = ticker_df.sort_values(by='timestamp_emissione')
         
+        # Recupera la descrizione dal CSV, altrimenti usa la sigla
+        desc = descriptions.get(ticker, ticker)
+        chart_title = f"<b>{ticker}</b> - {desc}"
+        
         fig = go.Figure()
 
         # Linea dello score per questo specifico ticker
@@ -66,8 +79,8 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str) -> str:
             y=ticker_df['score'],
             mode='lines+markers',
             name=ticker,
-            line=dict(width=2, color='#00d2ff'), # Celeste acceso
-            marker=dict(size=6, color='#00d2ff') # Marker visibili anche con 1 solo dato
+            line=dict(width=2, color='#00d2ff'), 
+            marker=dict(size=6, color='#00d2ff') 
         ))
 
         # Linee orizzontali per BUY/SELL
@@ -84,17 +97,15 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str) -> str:
 
         # Layout ingrandito per ogni singolo ticker
         fig.update_layout(
-            title=dict(text=f"<b>{ticker}</b>", font=dict(size=20)),
+            title=dict(text=chart_title, font=dict(size=20)),
             xaxis_title="Data/Ora",
             yaxis_title="Score (0.0 - 1.0)",
             yaxis=dict(range=[0.0, 1.0]),
             template="plotly_dark",
-            height=600, # Altezza aumentata
+            height=600, 
             margin=dict(l=40, r=40, t=60, b=40)
         )
 
-        # Convertiamo il grafico in HTML e lo accodiamo.
-        # IMPORTANTE: include_plotlyjs='cdn' si assicura che i dati vengano renderizzati correttamente
         charts_html += f'<div class="chart-container">{fig.to_html(include_plotlyjs="cdn", full_html=False)}</div>'
 
     # Creazione della pagina HTML completa
@@ -140,23 +151,26 @@ def main():
     print("📊 GENERAZIONE GRAFICI STORICI (Multi-Chart)")
     print("=" * 60)
 
+    # Carichiamo le descrizioni dal file CSV (Restituisce 4 variabili: portafoglio, watchlist, descrizioni, etf)
+    _, _, descriptions, _ = load_titoli_csv()
+
     # 1. ETF
     df_etf = get_data_from_db(ETF_DB, "ETF")
-    link_etf = create_multi_chart_page(df_etf, "ETF", "storico_etf.html")
+    link_etf = create_multi_chart_page(df_etf, "ETF", "storico_etf.html", descriptions)
     if link_etf: print(f"✅ Generato ETF: {link_etf}")
 
     # 2. OSSERVATI (Kenzo)
     df_oss = get_data_from_db(KENZO_DB, "WATCHLIST")
-    link_oss = create_multi_chart_page(df_oss, "Osservati", "storico_osservati.html")
+    link_oss = create_multi_chart_page(df_oss, "Osservati", "storico_osservati.html", descriptions)
     if link_oss: print(f"✅ Generato Osservati: {link_oss}")
 
     # 3. PORTAFOGLIO (Kenzo)
     df_port = get_data_from_db(KENZO_DB, "PORTAFOGLIO")
-    link_port = create_multi_chart_page(df_port, "Portafoglio", "storico_portafoglio.html")
+    link_port = create_multi_chart_page(df_port, "Portafoglio", "storico_portafoglio.html", descriptions)
     if link_port: 
         print(f"✅ Generato Portafoglio: {link_port}")
     else:
-        print("ℹ️ Nessun titolo in portafoglio, grafico non generato.")
+        print("ℹ️ Nessun titolo in portafoglio, grafico non generato (o vuoto).")
 
     print("\n🏁 Completato.")
 
