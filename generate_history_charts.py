@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Generatore di grafici storici degli Score.
-Estrae i dati dai DB, legge le descrizioni dal CSV e crea i grafici.
+Estrae i dati dai DB, raggruppa per giorno (per nascondere i vecchi dati orari)
+e usa le descrizioni dal CSV.
 """
 
 import os
@@ -17,23 +18,19 @@ BASE_DOCS_DIR = "docs"
 KENZO_DB = "kenzo_history.db"
 ETF_DB = "etf_history.db"
 
-# Soglie operative
 BUY_THRESHOLD = 0.60
 SELL_THRESHOLD = 0.40
-
-# Mostra solo gli ultimi N giorni di storico (per evitare i vecchi picchi orari)
 MAX_DAYS_HISTORY = 60 
 
 
 def get_data_from_db(db_path: str, categoria: str) -> pd.DataFrame:
-    """Estrae le previsioni dal DB per una specifica categoria."""
+    """Estrae le previsioni dal DB e tiene solo l'ultimo dato di ogni giorno."""
     if not os.path.exists(db_path):
         print(f"⚠️ DB non trovato: {db_path}")
         return pd.DataFrame()
 
     try:
         conn = sqlite3.connect(db_path)
-        # Filtriamo per gli ultimi X giorni
         query = f"""
             SELECT ticker, timestamp_emissione, score 
             FROM previsioni 
@@ -46,6 +43,13 @@ def get_data_from_db(db_path: str, categoria: str) -> pd.DataFrame:
         
         if not df.empty:
             df['timestamp_emissione'] = pd.to_datetime(df['timestamp_emissione'])
+            
+            # --- MAGIA: Raggruppiamo per giorno e teniamo solo l'ultima rilevazione ---
+            # Questo nasconde i vecchi dati orari e mostra un solo punto al giorno
+            df['data'] = df['timestamp_emissione'].dt.date
+            df = df.drop_duplicates(subset=['ticker', 'data'], keep='last')
+            df = df.drop(columns=['data'])
+            
         return df
     except Exception as e:
         print(f"❌ Errore lettura DB {db_path} ({categoria}): {e}")
@@ -53,27 +57,21 @@ def get_data_from_db(db_path: str, categoria: str) -> pd.DataFrame:
 
 
 def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str, descriptions: dict) -> str:
-    """Crea una pagina HTML con un grafico separato per ogni ticker."""
     if df.empty:
         print(f"⚠️ Nessun dato per {title}. Salto la generazione.")
         return ""
 
     charts_html = ""
     
-    # Ciclo su ogni ticker presente nel dataframe
     for ticker in df['ticker'].unique():
         ticker_df = df[df['ticker'] == ticker].copy()
-        
-        # Assicuriamoci che i dati siano ordinati per data
         ticker_df = ticker_df.sort_values(by='timestamp_emissione')
         
-        # Recupera la descrizione dal CSV, altrimenti usa la sigla
         desc = descriptions.get(ticker, ticker)
         chart_title = f"<b>{ticker}</b> - {desc}"
         
         fig = go.Figure()
 
-        # Linea dello score per questo specifico ticker
         fig.add_trace(go.Scatter(
             x=ticker_df['timestamp_emissione'],
             y=ticker_df['score'],
@@ -83,22 +81,18 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str, descrip
             marker=dict(size=6, color='#00d2ff') 
         ))
 
-        # Linee orizzontali per BUY/SELL
         fig.add_hline(y=BUY_THRESHOLD, line_dash="dash", line_color="#00ff00", 
                       annotation_text="BUY (>0.60)", annotation_position="top left")
         fig.add_hline(y=SELL_THRESHOLD, line_dash="dash", line_color="#ff3333", 
                       annotation_text="SELL (<0.40)", annotation_position="bottom left")
 
-        # Se c'è un solo punto, aggiungiamo un margine temporale fittizio
-        # per far sì che Plotly non "schiacci" il punto sul bordo dell'asse X
         if len(ticker_df) == 1:
             data_unica = ticker_df['timestamp_emissione'].iloc[0]
             fig.update_xaxes(range=[data_unica - pd.Timedelta(hours=12), data_unica + pd.Timedelta(hours=12)])
 
-        # Layout ingrandito per ogni singolo ticker
         fig.update_layout(
             title=dict(text=chart_title, font=dict(size=20)),
-            xaxis_title="Data/Ora",
+            xaxis_title="Data",
             yaxis_title="Score (0.0 - 1.0)",
             yaxis=dict(range=[0.0, 1.0]),
             template="plotly_dark",
@@ -108,7 +102,6 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str, descrip
 
         charts_html += f'<div class="chart-container">{fig.to_html(include_plotlyjs="cdn", full_html=False)}</div>'
 
-    # Creazione della pagina HTML completa
     out_dir = os.path.join(BASE_DOCS_DIR)
     os.makedirs(out_dir, exist_ok=True)
     file_path = os.path.join(out_dir, filename)
@@ -148,23 +141,19 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str, descrip
 
 def main():
     print("=" * 60)
-    print("📊 GENERAZIONE GRAFICI STORICI (Multi-Chart)")
+    print("📊 GENERAZIONE GRAFICI STORICI (Multi-Chart Giornaliero)")
     print("=" * 60)
 
-    # Carichiamo le descrizioni dal file CSV (Restituisce 4 variabili: portafoglio, watchlist, descrizioni, etf)
     _, _, descriptions, _ = load_titoli_csv()
 
-    # 1. ETF
     df_etf = get_data_from_db(ETF_DB, "ETF")
     link_etf = create_multi_chart_page(df_etf, "ETF", "storico_etf.html", descriptions)
     if link_etf: print(f"✅ Generato ETF: {link_etf}")
 
-    # 2. OSSERVATI (Kenzo)
     df_oss = get_data_from_db(KENZO_DB, "WATCHLIST")
     link_oss = create_multi_chart_page(df_oss, "Osservati", "storico_osservati.html", descriptions)
     if link_oss: print(f"✅ Generato Osservati: {link_oss}")
 
-    # 3. PORTAFOGLIO (Kenzo)
     df_port = get_data_from_db(KENZO_DB, "PORTAFOGLIO")
     link_port = create_multi_chart_page(df_port, "Portafoglio", "storico_portafoglio.html", descriptions)
     if link_port: 
