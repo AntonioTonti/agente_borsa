@@ -1,4 +1,4 @@
-name: Agente ETF Orario
+name: Agente ETF Giornaliero
 
 on:
   workflow_dispatch:
@@ -32,6 +32,9 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python agente_etf.py
+
+      - name: Genera Grafici Storici
+        run: python generate_history_charts.py
 
       - name: Commit e Push
         run: |
