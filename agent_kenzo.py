@@ -2,12 +2,12 @@
 """
 Agente Kenzo - Analisi Giornaliera con VIX Regime
 
-Differenze rispetto al FLASH:
-- Solo timeframe Daily (nessun 1H)
-- 12 indicatori (aggiunto vix_regime al 10%)
-- Pesi ripartiti: ZigZag 8%, RSI 3%, MACD 4%
+Caratteristiche:
+- Timeframe: Daily (1d) eseguito a metà giornata
+- 12 indicatori (incluso VIX Regime)
 - DB separato: kenzo_history.db
 - Orizzonte verifica: 5 giorni
+- Auto-tuning dei pesi attivo
 """
 
 import os
@@ -55,12 +55,12 @@ DEFAULT_WEIGHTS_KENZO = {
     "delta_ema_ma": 0.12,
     "ha_force": 0.15,
     "ha_state": 0.10,
-    "zigzag": 0.08,         # era 0.10
+    "zigzag": 0.08,
     "vol": 0.05,
     "close_change": 0.05,
-    "rsi": 0.03,            # era 0.05
-    "macd": 0.04,           # era 0.05
-    "vix_regime": 0.10,     # NUOVO
+    "rsi": 0.03,
+    "macd": 0.04,
+    "vix_regime": 0.10,
 }
 
 
@@ -179,7 +179,6 @@ def analyze_df_engine(
     if pesi is None:
         pesi = dict(DEFAULT_WEIGHTS_KENZO)
 
-    # Se vix_data non passato, default neutro
     if vix_data is None:
         vix_data = {'score': 0.5, 'vix_value': None, 'message': "VIX: N/D"}
 
@@ -382,7 +381,7 @@ def analyze_df_engine(
 
 
 # ============================================================================
-# ANALISI TICKER (solo Daily)
+# ANALISI TICKER (Daily)
 # ============================================================================
 def analyze_kenzo_ticker(
     ticker: str,
@@ -392,10 +391,15 @@ def analyze_kenzo_ticker(
     extra_data = {'daily_var_pct': 0.0, 'risk_daily': {}}
     try:
         tk = yf.Ticker(ticker)
+        
+        # Timeframe: 6 mesi di dati Daily
         df_d = tk.history(period="6mo", interval="1d", auto_adjust=True)
         if df_d.empty or len(df_d) < DAILY_MIN_POINTS:
             print(f"⚠️ {ticker}: dati daily insufficienti.")
             return [], 0.5, extra_data, None
+
+        if isinstance(df_d.columns, pd.MultiIndex):
+            df_d.columns = df_d.columns.get_level_values(0)
 
         df_d = df_d[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
 
@@ -404,8 +408,10 @@ def analyze_kenzo_ticker(
         prev_close = fast_info.get('previousClose', None)
         if last_price is None or np.isnan(last_price):
             last_price = float(df_d['Close'].iloc[-1])
+            
         today_date = datetime.now().date()
         last_df_date = df_d.index[-1].date()
+        
         if prev_close is None or np.isnan(prev_close) or prev_close <= 0:
             if last_df_date == today_date and len(df_d) >= 2:
                 prev_close = float(df_d['Close'].iloc[-2])
@@ -413,6 +419,8 @@ def analyze_kenzo_ticker(
                 prev_close = float(df_d['Close'].iloc[-1])
             else:
                 prev_close = last_price
+                
+        # Forza il prezzo dell'ultima candela (quella di oggi) con il prezzo live
         if last_df_date == today_date:
             df_d.iloc[-1, df_d.columns.get_loc('Close')] = last_price
 
@@ -604,7 +612,6 @@ def process_ticker_group(
         signals_d, score_d, extra_data, df_d = analyze_kenzo_ticker(
             ticker, pesi=pesi, vix_data=vix_data
         )
-        # Inietta vix_value per il report
         extra_data['vix_value'] = vix_data.get('vix_value')
         results.append((ticker, signals_d, score_d, extra_data, df_d))
 
@@ -639,33 +646,26 @@ def main():
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
 
-        # Imposta DB path per Kenzo
         set_db_path(DB_PATH)
         init_db()
 
-        # VIX (una volta per run)
         print("\n😱 DOWNLOAD VIX")
         vix_data = get_vix_regime()
         print(f"   VIX: {vix_data['vix_value']} | Score: {vix_data['score']}")
         print(f"   {vix_data['message']}")
 
-        # Verifica previsioni
         print("\n🔍 VERIFICA PREVISIONI SCADUTE")
         verifica_previsioni_scadute()
 
-        # Auto-tuning
         print("\n🎯 AUTO-TUNING PESI")
         for cat in ["PORTAFOGLIO", "WATCHLIST"]:
             evaluate_and_tune(cat)
 
-        # Carica titoli
         portfolio, watchlist, descriptions, etf_list = load_titoli_csv()
 
-        # Analizza solo PORTAFOGLIO e WATCHLIST (no ETF)
         portfolio_results = process_ticker_group(portfolio, "PORTAFOGLIO", descriptions, vix_data)
         watchlist_results = process_ticker_group(watchlist, "WATCHLIST", descriptions, vix_data)
 
-        # Invio Telegram
         token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
