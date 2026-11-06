@@ -33,6 +33,9 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python agent_kenzo.py
 
+      - name: Genera Grafici Storici
+        run: python generate_history_charts.py
+
       - name: Commit e Push
         run: |
           git config --global user.name "github-actions[bot]"
