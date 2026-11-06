@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Agente ETF - Analisi Oraria con ADX Regime
+Agente ETF - Analisi Giornaliera con ADX Regime
 
 Caratteristiche:
-- Solo timeframe Hourly (1H)
+- Timeframe: Daily (1d) a chiusura mercati
 - 11 indicatori (analyst escluso, adx_regime al suo posto)
 - Pesi ottimizzati per "velocità" (delta EMA, trend, RSI più pesanti)
 - DB separato: etf_history.db
 - Orizzonte verifica: 5 giorni
 - Auto-tuning dei pesi attivo
-- Solo ticker con tipo == "ETF" da titoli.csv
 """
 
 import os
@@ -47,9 +46,9 @@ from auto_tuner import evaluate_and_tune
 DB_PATH = "etf_history.db"
 RISK_PER_TRADE_PCT = 2.0
 ORIZZONTE_VERIFICA_GIORNI = 5
-ETF_MIN_POINTS = 32  # minimo candele hourly per analisi
+ETF_MIN_POINTS = 32  # minimo candele daily per analisi
 
-# Pesi di default ETF (ottimizzati per velocità, senza analyst, con adx_regime)
+# Pesi di default ETF
 DEFAULT_WEIGHTS_ETF = {
     "ema_ma": 0.12,
     "trend": 0.15,
@@ -146,29 +145,17 @@ def compute_risk_metrics(df: pd.DataFrame, current_price: Optional[float] = None
 # HELPER: ADX REGIME
 # ============================================================================
 def compute_adx_regime(df: pd.DataFrame) -> Tuple[float, str]:
-    """
-    Calcola ADX e restituisce (score, messaggio).
-    Score:
-      ADX < 20   → 0.20 (laterale, penalizza)
-      ADX 20-25  → 0.50 (neutro)
-      ADX 25-40  → 1.00 (trend forte, favorisce)
-      ADX > 40   → 0.70 (trend esaurito, cautela)
-    """
     if df is None or len(df) < 15:
         return 0.5, "ADX: N/D"
-
     try:
         high = df['High'].squeeze()
         low = df['Low'].squeeze()
         close = df['Close'].squeeze()
-
         adx_obj = ta.trend.ADXIndicator(high=high, low=low, close=close, window=14)
         adx_series = adx_obj.adx().dropna()
         if adx_series.empty:
             return 0.5, "ADX: N/D"
-
         adx_val = float(adx_series.iloc[-1])
-
         if adx_val < 20:
             return 0.20, f"ADX {adx_val:.1f} - Laterale 🔴"
         elif adx_val < 25:
@@ -183,7 +170,7 @@ def compute_adx_regime(df: pd.DataFrame) -> Tuple[float, str]:
 
 
 # ============================================================================
-# MOTORE DI ANALISI (ETF — senza analyst, con adx_regime)
+# MOTORE DI ANALISI (ETF)
 # ============================================================================
 def analyze_df_engine(
     df: pd.DataFrame,
@@ -199,7 +186,7 @@ def analyze_df_engine(
     ha_force_score = ha_state_score = zigzag_score = vol_score = 0.5
     close_change_score = rsi_score = macd_score = 0.5
     adx_regime_score = 0.5
-    analyst_score = 0.5  # non usato nei pesi ETF, ma presente per coerenza sub_scores
+    analyst_score = 0.5
 
     close = df['Close']
     volume = df['Volume']
@@ -381,7 +368,7 @@ def analyze_df_engine(
         "rsi": rsi_score,
         "macd": macd_score,
         "adx_regime": adx_regime_score,
-        "analyst": analyst_score,  # peso 0 nei default ETF, ma lo salviamo per coerenza
+        "analyst": analyst_score,
     }
 
     final_score = sum(sub_scores[k] * pesi.get(k, 0.0) for k in sub_scores)
@@ -391,39 +378,48 @@ def analyze_df_engine(
 
 
 # ============================================================================
-# ANALISI TICKER ETF (solo Hourly)
+# ANALISI TICKER ETF (Daily)
 # ============================================================================
 def analyze_etf_ticker(
     ticker: str,
     pesi: Optional[Dict[str, float]] = None,
 ) -> Tuple[List[str], float, Dict, Optional[pd.DataFrame]]:
-    extra_data = {'hourly_var_pct': 0.0, 'risk_hourly': {}}
+    extra_data = {'daily_var_pct': 0.0, 'risk_daily': {}}
     try:
         tk = yf.Ticker(ticker)
 
-        df_h = tk.history(period="1mo", interval="1h", auto_adjust=True)
-        if df_h.empty or len(df_h) < ETF_MIN_POINTS:
-            print(f"⚠️ {ticker}: dati hourly insufficienti.")
+        # Timeframe: 6 mesi di dati Daily
+        df_d = tk.history(period="6mo", interval="1d", auto_adjust=True)
+        if df_d.empty or len(df_d) < ETF_MIN_POINTS:
+            print(f"⚠️ {ticker}: dati daily insufficienti.")
             return [], 0.5, extra_data, None
 
-        if isinstance(df_h.columns, pd.MultiIndex):
-            df_h.columns = df_h.columns.get_level_values(0)
+        if isinstance(df_d.columns, pd.MultiIndex):
+            df_d.columns = df_d.columns.get_level_values(0)
 
-        df_h = df_h[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
+        df_d = df_d[['Open', 'High', 'Low', 'Close', 'Volume']].dropna()
 
-        last_price = float(df_h['Close'].iloc[-1])
-        prev_close = float(df_h['Close'].iloc[-2]) if len(df_h) >= 2 else last_price
+        fast_info = getattr(tk, 'fast_info', {})
+        last_price = fast_info.get('lastPrice', None)
+        prev_close = fast_info.get('previousClose', None)
+        if last_price is None or np.isnan(last_price):
+            last_price = float(df_d['Close'].iloc[-1])
+        if prev_close is None or np.isnan(prev_close) or prev_close <= 0:
+            if len(df_d) >= 2:
+                prev_close = float(df_d['Close'].iloc[-2])
+            else:
+                prev_close = last_price
 
         pct_change = ((last_price - prev_close) / prev_close) * 100.0 if prev_close > 0 else 0.0
-        extra_data['hourly_var_pct'] = pct_change
+        extra_data['daily_var_pct'] = pct_change
         extra_data['last_price'] = last_price
-        extra_data['risk_hourly'] = compute_risk_metrics(df_h, current_price=last_price)
+        extra_data['risk_daily'] = compute_risk_metrics(df_d, current_price=last_price)
 
-        signals, score, extra_d, sub_scores = analyze_df_engine(df_h, pesi=pesi)
+        signals, score, extra_d, sub_scores = analyze_df_engine(df_d, pesi=pesi)
         extra_data.update(extra_d)
         extra_data['sub_scores'] = sub_scores
 
-        return signals, score, extra_data, df_h
+        return signals, score, extra_data, df_d
 
     except Exception as e:
         print(f"❌ Errore analisi {ticker}: {e}")
@@ -448,7 +444,7 @@ def verifica_previsioni_scadute() -> None:
             fast_info = getattr(tk, 'fast_info', {})
             prezzo_ora = fast_info.get('lastPrice', None)
             if prezzo_ora is None or (isinstance(prezzo_ora, float) and np.isnan(prezzo_ora)):
-                df_tmp = tk.history(period="5d", interval="1h", auto_adjust=True)
+                df_tmp = tk.history(period="5d", interval="1d", auto_adjust=True)
                 if df_tmp.empty:
                     continue
                 prezzo_ora = float(df_tmp['Close'].iloc[-1])
@@ -482,16 +478,16 @@ def _build_single_ticker_block(
 ) -> str:
     desc = descriptions.get(ticker, ticker)
     bullet = get_bullet(score)
-    var_pct = extra_data.get('hourly_var_pct', 0.0)
+    var_pct = extra_data.get('daily_var_pct', 0.0)
     sign = "+" if var_pct > 0 else ""
     url = f"https://antoniotonti.github.io/agente_borsa/etf/{ticker}.html"
-    risk_h = extra_data.get('risk_hourly', {})
+    risk_d = extra_data.get('risk_daily', {})
 
     parts = []
     parts.append(f"🔹 [{ticker}]({url}) - *{desc}* (Oggi: {sign}{var_pct:.2f}%)")
     parts.append("")
-    parts.append(f"   ⚡ *1H:* {bullet} `{score:.3f}`")
-    parts.extend(_format_risk_block(risk_h))
+    parts.append(f"   📈 *Daily:* {bullet} `{score:.3f}`")
+    parts.extend(_format_risk_block(risk_d))
     parts.append("")
     return "\n".join(parts)
 
@@ -512,7 +508,7 @@ def create_report_blocks(
 
 def create_etf_report(results, descriptions):
     now_str = datetime.now().strftime("%H:%M")
-    return create_report_blocks(f"📊 *ETF ORARIO ({now_str})*", results, descriptions)
+    return create_report_blocks(f"📊 *ETF GIORNALIERO ({now_str})*", results, descriptions)
 
 
 # ============================================================================
@@ -590,13 +586,13 @@ def process_etf_group(tickers: List[str], descriptions: Dict) -> List:
         print(f"      {ind:15s}: {p:.4f}")
 
     for ticker in tickers:
-        signals, score, extra_data, df_h = analyze_etf_ticker(ticker, pesi=pesi)
-        results.append((ticker, signals, score, extra_data, df_h))
+        signals, score, extra_data, df_d = analyze_etf_ticker(ticker, pesi=pesi)
+        results.append((ticker, signals, score, extra_data, df_d))
 
-        if df_h is not None and not df_h.empty:
+        if df_d is not None and not df_d.empty:
             desc = descriptions.get(ticker, ticker)
-            generate_web_page(ticker, desc, "etf", df_h, score, signals)
-            prezzo_emissione = extra_data.get('last_price', float(df_h['Close'].iloc[-1]))
+            generate_web_page(ticker, desc, "etf", df_d, score, signals)
+            prezzo_emissione = extra_data.get('last_price', float(df_d['Close'].iloc[-1]))
             sub_scores = extra_data.get('sub_scores', {})
             try:
                 save_previsione(
@@ -620,7 +616,7 @@ def main():
     start_time = time.time()
     try:
         print("=" * 60)
-        print("📊 AGENTE ETF - ANALISI ORARIA con ADX Regime")
+        print("📊 AGENTE ETF - ANALISI GIORNALIERA con ADX Regime")
         print(f"Avvio: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print("=" * 60)
 
@@ -633,7 +629,6 @@ def main():
         print("\n🎯 AUTO-TUNING PESI")
         evaluate_and_tune("ETF")
 
-        # Carica titoli e filtra solo ETF
         _, _, descriptions, etf_list = load_titoli_csv()
 
         etf_results = process_etf_group(etf_list, descriptions)
