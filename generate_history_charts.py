@@ -53,7 +53,10 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str) -> str:
     
     # Ciclo su ogni ticker presente nel dataframe
     for ticker in df['ticker'].unique():
-        ticker_df = df[df['ticker'] == ticker]
+        ticker_df = df[df['ticker'] == ticker].copy()
+        
+        # Assicuriamoci che i dati siano ordinati per data
+        ticker_df = ticker_df.sort_values(by='timestamp_emissione')
         
         fig = go.Figure()
 
@@ -63,8 +66,8 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str) -> str:
             y=ticker_df['score'],
             mode='lines+markers',
             name=ticker,
-            line=dict(width=2, color='#00d2ff'), # Un bel celeste acceso
-            marker=dict(size=5)
+            line=dict(width=2, color='#00d2ff'), # Celeste acceso
+            marker=dict(size=6, color='#00d2ff') # Marker visibili anche con 1 solo dato
         ))
 
         # Linee orizzontali per BUY/SELL
@@ -72,6 +75,12 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str) -> str:
                       annotation_text="BUY (>0.60)", annotation_position="top left")
         fig.add_hline(y=SELL_THRESHOLD, line_dash="dash", line_color="#ff3333", 
                       annotation_text="SELL (<0.40)", annotation_position="bottom left")
+
+        # Se c'è un solo punto, aggiungiamo un margine temporale fittizio
+        # per far sì che Plotly non "schiacci" il punto sul bordo dell'asse X
+        if len(ticker_df) == 1:
+            data_unica = ticker_df['timestamp_emissione'].iloc[0]
+            fig.update_xaxes(range=[data_unica - pd.Timedelta(hours=12), data_unica + pd.Timedelta(hours=12)])
 
         # Layout ingrandito per ogni singolo ticker
         fig.update_layout(
@@ -84,8 +93,9 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str) -> str:
             margin=dict(l=40, r=40, t=60, b=40)
         )
 
-        # Convertiamo il grafico in HTML e lo accodiamo
-        charts_html += f'<div class="chart-container">{fig.to_html(include_plotlyjs=False, full_html=False)}</div>'
+        # Convertiamo il grafico in HTML e lo accodiamo.
+        # IMPORTANTE: include_plotlyjs='cdn' si assicura che i dati vengano renderizzati correttamente
+        charts_html += f'<div class="chart-container">{fig.to_html(include_plotlyjs="cdn", full_html=False)}</div>'
 
     # Creazione della pagina HTML completa
     out_dir = os.path.join(BASE_DOCS_DIR)
@@ -98,8 +108,6 @@ def create_multi_chart_page(df: pd.DataFrame, title: str, filename: str) -> str:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{title} - Storico Score</title>
-    <!-- Includiamo Plotly e Bootstrap una sola volta -->
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body {{ background-color: #121212; color: white; padding: 20px; }}
@@ -148,7 +156,7 @@ def main():
     if link_port: 
         print(f"✅ Generato Portafoglio: {link_port}")
     else:
-        print("ℹ️ Nessun titolo in portafoglio, grafico non generato (o vuoto).")
+        print("ℹ️ Nessun titolo in portafoglio, grafico non generato.")
 
     print("\n🏁 Completato.")
 
